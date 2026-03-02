@@ -1,47 +1,82 @@
+"""
+Well-plate path generation.
+
+Supported scan patterns
+-----------------------
+raster  — left-to-right on every row (default)
+snake   — left-to-right on even rows, right-to-left on odd rows
+          (minimises stage travel distance)
+"""
 from typing import List, Tuple
+
 
 class WellPlate:
     """Generates and stores the path for a well plate experiment."""
 
-    def __init__(self, width: int, depth: int, corners: List[Tuple[float, float, float]]):
+    PATTERN_RASTER = "Raster"
+    PATTERN_SNAKE  = "Snake"
+
+    def __init__(
+        self,
+        width: int,
+        depth: int,
+        corners: List[Tuple[float, float, float]],
+        pattern: str = PATTERN_RASTER,
+    ):
         if len(corners) != 4:
             raise ValueError("Exactly four corner points are required.")
-        self.width = width
-        self.depth = depth
+        self.width   = width
+        self.depth   = depth
         self.corners = corners
-        self.path = self._generate_path()
+        self.pattern = pattern
+        self.path    = self._generate_path()
 
-    def _generate_path(self) -> List[Tuple[float, float, float]]:
-        """Generate a path of well positions from four corner coordinates."""
-        path: List[Tuple[float, float, float]] = []
-        
+    # ------------------------------------------------------------------
+    # Path generation
+    # ------------------------------------------------------------------
+
+    def _interpolate(self, row_i: int, col_j: int) -> Tuple[float, float, float]:
+        """Bilinear interpolation for a single well position."""
         upper_left, lower_left, upper_right, lower_right = self.corners
         x1, y1, z1 = upper_left
         x2, y2, z2 = lower_left
         x3, y3, z3 = upper_right
         x4, y4, z4 = lower_right
-        
-        for i in range(self.depth):
-            for j in range(self.width):
-                u = j / (self.width - 1) if self.width > 1 else 0.0
-                v = i / (self.depth - 1) if self.depth > 1 else 0.0
-                
-                top_x = x1 + u * (x3 - x1)
-                top_y = y1 + u * (y3 - y1)
-                top_z = z1 + u * (z3 - z1)
-                
-                bottom_x = x2 + u * (x4 - x2)
-                bottom_y = y2 + u * (y4 - y2)
-                bottom_z = z2 + u * (z4 - z2)
-                
-                x = top_x + v * (bottom_x - top_x)
-                y = top_y + v * (bottom_y - top_y)
-                z = top_z + v * (bottom_z - top_z)
-                
-                path.append((x, y, z))
-        
+
+        u = col_j / (self.width - 1) if self.width > 1 else 0.0
+        v = row_i / (self.depth - 1) if self.depth > 1 else 0.0
+
+        top_x = x1 + u * (x3 - x1)
+        top_y = y1 + u * (y3 - y1)
+        top_z = z1 + u * (z3 - z1)
+
+        bot_x = x2 + u * (x4 - x2)
+        bot_y = y2 + u * (y4 - y2)
+        bot_z = z2 + u * (z4 - z2)
+
+        return (
+            top_x + v * (bot_x - top_x),
+            top_y + v * (bot_y - top_y),
+            top_z + v * (bot_z - top_z),
+        )
+
+    def _generate_path(self) -> List[Tuple[float, float, float]]:
+        """
+        Generate the ordered list of well positions.
+
+        For raster: row 0 → cols 0..N-1, row 1 → cols 0..N-1, …
+        For snake:  row 0 → cols 0..N-1, row 1 → cols N-1..0, …
+        """
+        path: List[Tuple[float, float, float]] = []
+
+        for row_i in range(self.depth):
+            cols = range(self.width)
+            if self.pattern == self.PATTERN_SNAKE and row_i % 2 == 1:
+                cols = range(self.width - 1, -1, -1)
+            for col_j in cols:
+                path.append(self._interpolate(row_i, col_j))
+
         return path
 
     def get_path(self) -> List[Tuple[float, float, float]]:
-        """Returns the generated path."""
         return self.path
