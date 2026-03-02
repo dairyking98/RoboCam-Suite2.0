@@ -34,6 +34,7 @@ import cv2
 from robocam_suite.hw_manager import hw_manager
 from robocam_suite.session_manager import session_manager
 from robocam_suite.ui.quick_capture_widget import QuickCaptureWidget
+from robocam_suite.ui.well_grid import WellGrid
 from robocam_suite.logger import setup_logger
 
 logger = setup_logger()
@@ -124,36 +125,11 @@ class _LivePreview(QWidget):
 # Well-plate map widget  (compact clickable grid — NOT the camera feed)
 # ---------------------------------------------------------------------------
 
-class _WellMapButton(QPushButton):
-    # Matches the experiment panel's WellSelectionWidget selected style
-    IDLE_STYLE = (
-        "background-color: #2a7ae2; color: white; border: 1px solid #1a5ab2; "
-        "border-radius: 3px; font-size: 9px; padding: 1px;"
-    )
-    HOVER_STYLE = (
-        "background-color: #1a5ab2; color: white; border: 1px solid #0a3a82; "
-        "border-radius: 3px; font-size: 9px; padding: 1px;"
-    )
-
-    def __init__(self, label: str, parent=None):
-        super().__init__(label, parent)
-        self.setFixedSize(36, 24)
-        self.setStyleSheet(self.IDLE_STYLE)
-        self.setToolTip(f"Move stage to well {label}")
-
-    def enterEvent(self, event):
-        self.setStyleSheet(self.HOVER_STYLE)
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self.setStyleSheet(self.IDLE_STYLE)
-        super().leaveEvent(event)
-
-
 class WellMapWidget(QGroupBox):
     """
-    Compact grid of buttons representing the well plate.
-    Clicking any button moves the stage to that well's computed XYZ position.
+    Compact grid for navigating to wells.  Uses the shared WellGrid in
+    NAVIGATE mode — a single custom-painted widget, no QPushButton children.
+    Clicking any cell emits well_clicked(x, y, z) with the computed position.
     """
     well_clicked = Signal(float, float, float)
 
@@ -164,76 +140,59 @@ class WellMapWidget(QGroupBox):
             "Click any well to move the stage directly to that position.\n"
             "Generated automatically after all four corners are set."
         )
-        self._layout = QGridLayout()
-        self._layout.setSpacing(2)
-        self._buttons: dict[tuple[int, int], _WellMapButton] = {}
-        self._positions: dict[tuple[int, int], tuple[float, float, float]] = {}
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        inner = QWidget()
-        inner.setLayout(self._layout)
-        scroll.setWidget(inner)
+        self._positions: list[tuple[float, float, float]] = []
+        self._rows = 0
+        self._cols = 0
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
-        outer.addWidget(scroll, stretch=1)
+        outer.setSpacing(4)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        outer.addWidget(self._scroll, stretch=1)
 
         self._placeholder = QLabel("Set all four corners\nor load a calibration\nto build the map.")
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._placeholder.setStyleSheet("color: gray; font-size: 10px;")
         outer.addWidget(self._placeholder)
 
+        self._grid: Optional[WellGrid] = None
+
     def build(self, rows: int, cols: int,
               positions: list[tuple[float, float, float]]):
-        for btn in self._buttons.values():
-            btn.deleteLater()
-        self._buttons.clear()
-        self._positions.clear()
-        while self._layout.count():
-            item = self._layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
+        self._rows = rows
+        self._cols = cols
+        self._positions = positions
         self._placeholder.hide()
 
-        for col in range(cols):
-            lbl = QLabel(str(col + 1))
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet("font-size: 8px; color: gray;")
-            self._layout.addWidget(lbl, 0, col + 1)
+        if self._grid is not None:
+            self._grid.well_clicked.disconnect()
+            self._grid.deleteLater()
 
-        idx = 0
-        for row in range(rows):
-            row_letter = chr(ord("A") + row)
-            hdr = QLabel(row_letter)
-            hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hdr.setStyleSheet("font-size: 8px; color: gray;")
-            self._layout.addWidget(hdr, row + 1, 0)
-            for col in range(cols):
-                label = f"{row_letter}{col + 1}"
-                pos = positions[idx] if idx < len(positions) else (0.0, 0.0, 0.0)
-                btn = _WellMapButton(label)
-                btn.clicked.connect(
-                    lambda checked=False, p=pos: self.well_clicked.emit(*p)
-                )
-                self._layout.addWidget(btn, row + 1, col + 1)
-                self._buttons[(row, col)] = btn
-                self._positions[(row, col)] = pos
-                idx += 1
+        self._grid = WellGrid(
+            rows=rows, cols=cols,
+            mode=WellGrid.Mode.NAVIGATE,
+        )
+        self._grid.well_clicked.connect(self._on_cell_clicked)
+        self._scroll.setWidget(self._grid)
 
     def clear(self):
-        for btn in self._buttons.values():
-            btn.deleteLater()
-        self._buttons.clear()
-        self._positions.clear()
-        while self._layout.count():
-            item = self._layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        if self._grid is not None:
+            self._grid.well_clicked.disconnect()
+            self._grid.deleteLater()
+            self._grid = None
+        self._positions = []
+        self._scroll.setWidget(QWidget())  # blank
         self._placeholder.show()
+
+    def _on_cell_clicked(self, row: int, col: int):
+        idx = row * self._cols + col
+        if 0 <= idx < len(self._positions):
+            x, y, z = self._positions[idx]
+            self.well_clicked.emit(x, y, z)
 
 
 # ---------------------------------------------------------------------------

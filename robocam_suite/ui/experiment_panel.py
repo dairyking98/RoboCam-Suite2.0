@@ -34,11 +34,10 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QGridLayout, QLabel, QLineEdit, QGroupBox,
     QComboBox, QFileDialog, QMessageBox,
-    QScrollArea, QSplitter, QButtonGroup, QRadioButton,
-    QStackedWidget,
+    QScrollArea, QSplitter, QStackedWidget,
 )
-from PySide6.QtCore import Qt, QThread, Signal, QSize
-from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QMouseEvent
+from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QImage, QPixmap, QPainter, QColor
 
 import cv2
 
@@ -46,6 +45,7 @@ from robocam_suite.hw_manager import hw_manager
 from robocam_suite.experiments.experiment import Experiment
 from robocam_suite.experiments.well_plate import WellPlate
 from robocam_suite.session_manager import session_manager
+from robocam_suite.ui.well_grid import WellGrid
 from robocam_suite.logger import setup_logger
 
 logger = setup_logger()
@@ -153,86 +153,13 @@ class _ExperimentRunner(QThread):
 
 
 # ---------------------------------------------------------------------------
-# Well toggle button — supports drag-to-toggle via mouse tracking
+# Well selection group — wraps WellGrid with toolbar
 # ---------------------------------------------------------------------------
 
-class _WellButton(QPushButton):
-    """Emits enter_while_pressed when the mouse enters it during a drag."""
-    enter_while_pressed = Signal(int, int)
-
-    SEL_STYLE = (
-        "background-color: #2a7ae2; color: white; border: 1px solid #1a5ab2; "
-        "border-radius: 3px; font-size: 9px; padding: 1px;"
-    )
-    DESEL_STYLE = (
-        "background-color: #555; color: #aaa; border: 1px solid #333; "
-        "border-radius: 3px; font-size: 9px; padding: 1px;"
-    )
-
-    def __init__(self, label: str, row: int, col: int, parent=None):
-        super().__init__(label, parent)
-        self._row = row
-        self._col = col
-        self._selected = True
-        self.setFixedSize(36, 24)
-        self._apply_style()
-        self.setMouseTracking(True)
-
-    def _apply_style(self):
-        self.setStyleSheet(self.SEL_STYLE if self._selected else self.DESEL_STYLE)
-
-    @property
-    def is_selected(self) -> bool:
-        return self._selected
-
-    def set_selected(self, value: bool):
-        if self._selected == value:
-            return
-        self._selected = value
-        self._apply_style()
-
-    def enterEvent(self, event):
-        from PySide6.QtWidgets import QApplication
-        if QApplication.mouseButtons() & Qt.MouseButton.LeftButton:
-            self.enter_while_pressed.emit(self._row, self._col)
-        super().enterEvent(event)
-
-
-# ---------------------------------------------------------------------------
-# Well grid inner widget — sizes to content so it anchors to the top
-# ---------------------------------------------------------------------------
-
-class _WellGridInner(QWidget):
+class _WellSelectionGroup(QGroupBox):
     """
-    Inner widget for the well selection scroll area.
-    Overrides sizeHint so the scroll area does not give it unlimited height,
-    which caused the grid to float to the bottom of the viewport.
-    """
-
-    def __init__(self, rows: int, cols: int, parent=None):
-        super().__init__(parent)
-        self._rows = rows
-        self._cols = cols
-
-    def sizeHint(self) -> QSize:
-        # 24px per button + 2px spacing + 20px header row + margins
-        h = 20 + self._rows * 26 + 8
-        w = 30 + self._cols * 38 + 8
-        return QSize(w, h)
-
-    def minimumSizeHint(self) -> QSize:
-        return self.sizeHint()
-
-
-# ---------------------------------------------------------------------------
-# Well selection widget — drag-to-toggle
-# ---------------------------------------------------------------------------
-
-class WellSelectionWidget(QGroupBox):
-    """
-    Interactive grid of toggle buttons.
-    Drag behaviour: the first well touched in a drag determines the target
-    state for the entire drag stroke (paint-bucket style).
+    Wraps WellGrid (SELECT mode) with Check All / Uncheck All / Invert toolbar
+    and a count label.
     """
 
     def __init__(self, parent=None):
@@ -241,14 +168,8 @@ class WellSelectionWidget(QGroupBox):
             "Click and drag over wells to select or deselect them.\n"
             "The first well you touch sets the target state for the whole drag:\n"
             "  • If it was selected → the drag deselects all wells it passes over.\n"
-            "  • If it was deselected → the drag selects all wells it passes over.\n\n"
-            "Use Check All / Uncheck All / Invert for bulk operations.\n"
-            "Click 'Sync from Calibration' to match the grid to your plate."
+            "  • If it was deselected → the drag selects all wells it passes over."
         )
-        self._rows = 8
-        self._cols = 12
-        self._buttons: dict[tuple[int, int], _WellButton] = {}
-        self._drag_target_state: Optional[bool] = None
 
         outer = QVBoxLayout(self)
         outer.setSpacing(4)
@@ -258,144 +179,47 @@ class WellSelectionWidget(QGroupBox):
         toolbar = QHBoxLayout()
         check_all_btn = QPushButton("Check All")
         check_all_btn.setFixedHeight(24)
-        check_all_btn.clicked.connect(self.check_all)
-        toolbar.addWidget(check_all_btn)
         uncheck_all_btn = QPushButton("Uncheck All")
         uncheck_all_btn.setFixedHeight(24)
-        uncheck_all_btn.clicked.connect(self.uncheck_all)
-        toolbar.addWidget(uncheck_all_btn)
         invert_btn = QPushButton("Invert")
         invert_btn.setFixedHeight(24)
-        invert_btn.clicked.connect(self.invert)
-        toolbar.addWidget(invert_btn)
         self._count_label = QLabel("")
         self._count_label.setStyleSheet(STATUS_STYLE)
+
+        toolbar.addWidget(check_all_btn)
+        toolbar.addWidget(uncheck_all_btn)
+        toolbar.addWidget(invert_btn)
         toolbar.addWidget(self._count_label, stretch=1)
         outer.addLayout(toolbar)
 
-        # Scroll area containing the grid
+        # Scroll area containing the WellGrid
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         outer.addWidget(self._scroll, stretch=1)
 
-        self._rebuild_grid()
+        self._grid = WellGrid(rows=8, cols=12, mode=WellGrid.Mode.SELECT)
+        self._grid.selection_changed.connect(self._update_count)
+        self._scroll.setWidget(self._grid)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+        check_all_btn.clicked.connect(self._grid.check_all)
+        uncheck_all_btn.clicked.connect(self._grid.uncheck_all)
+        invert_btn.clicked.connect(self._grid.invert)
+
+        self._update_count()
 
     def rebuild(self, rows: int, cols: int):
-        old = {pos: btn.is_selected for pos, btn in self._buttons.items()}
-        self._rows = rows
-        self._cols = cols
-        self._drag_target_state = None
-        self._rebuild_grid(old)
-
-    def check_all(self):
-        for btn in self._buttons.values():
-            btn.set_selected(True)
-        self._update_count()
-
-    def uncheck_all(self):
-        for btn in self._buttons.values():
-            btn.set_selected(False)
-        self._update_count()
-
-    def invert(self):
-        for btn in self._buttons.values():
-            btn.set_selected(not btn.is_selected)
+        self._grid.rebuild(rows, cols)
         self._update_count()
 
     def get_selected_indices(self) -> list[int]:
-        indices = []
-        idx = 0
-        for row in range(self._rows):
-            for col in range(self._cols):
-                if self._buttons[(row, col)].is_selected:
-                    indices.append(idx)
-                idx += 1
-        return indices
-
-    # ------------------------------------------------------------------
-    # Grid construction
-    # ------------------------------------------------------------------
-
-    def _rebuild_grid(self, old: dict | None = None):
-        # Disconnect and delete old buttons
-        for btn in self._buttons.values():
-            try:
-                btn.enter_while_pressed.disconnect()
-                btn.pressed.disconnect()
-            except RuntimeError:
-                pass
-            btn.deleteLater()
-        self._buttons.clear()
-
-        # Build a new inner widget that sizes to its content
-        inner = _WellGridInner(self._rows, self._cols)
-        grid = QGridLayout(inner)
-        grid.setSpacing(2)
-        grid.setContentsMargins(4, 4, 4, 4)
-        grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-
-        # Column headers
-        for col in range(self._cols):
-            lbl = QLabel(str(col + 1))
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet("font-size: 9px; color: gray;")
-            lbl.setFixedSize(36, 16)
-            grid.addWidget(lbl, 0, col + 1)
-
-        # Row headers + buttons
-        for row in range(self._rows):
-            row_letter = chr(ord("A") + row)
-            hdr = QLabel(row_letter)
-            hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hdr.setStyleSheet("font-size: 9px; color: gray;")
-            hdr.setFixedSize(24, 24)
-            grid.addWidget(hdr, row + 1, 0)
-
-            for col in range(self._cols):
-                label = f"{row_letter}{col + 1}"
-                btn = _WellButton(label, row, col)
-                if old is not None:
-                    btn.set_selected(old.get((row, col), True))
-                btn.pressed.connect(
-                    lambda r=row, c=col: self._on_drag_start(r, c)
-                )
-                btn.enter_while_pressed.connect(self._on_drag_enter)
-                grid.addWidget(btn, row + 1, col + 1)
-                self._buttons[(row, col)] = btn
-
-        self._scroll.setWidget(inner)
-        self._update_count()
-
-    # ------------------------------------------------------------------
-    # Drag-to-toggle logic
-    # ------------------------------------------------------------------
-
-    def _on_drag_start(self, row: int, col: int):
-        btn = self._buttons[(row, col)]
-        self._drag_target_state = not btn.is_selected
-        btn.set_selected(self._drag_target_state)
-        self._update_count()
-
-    def _on_drag_enter(self, row: int, col: int):
-        if self._drag_target_state is None:
-            return
-        self._buttons[(row, col)].set_selected(self._drag_target_state)
-        self._update_count()
-
-    def mouseReleaseEvent(self, event: QMouseEvent):
-        self._drag_target_state = None
-        super().mouseReleaseEvent(event)
+        return self._grid.get_selected_indices()
 
     def _update_count(self):
-        total = len(self._buttons)
-        selected = sum(1 for b in self._buttons.values() if b.is_selected)
-        self._count_label.setText(f"{selected}/{total} wells selected")
+        sel = self._grid.selected_count()
+        tot = self._grid.total_count()
+        self._count_label.setText(f"{sel}/{tot} wells selected")
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +276,7 @@ class ExperimentPanel(QWidget):
         col3_layout.setContentsMargins(4, 4, 4, 4)
         col3_layout.setSpacing(4)
 
-        self.well_selection = WellSelectionWidget()
+        self.well_selection = _WellSelectionGroup()
         col3_layout.addWidget(self.well_selection, stretch=1)
         splitter.addWidget(col3)
 
@@ -487,33 +311,39 @@ class ExperimentPanel(QWidget):
         layout = QGridLayout(grp)
         layout.setSpacing(6)
 
-        # Mode selector
         layout.addWidget(QLabel("Mode:"), 0, 0)
         self.mode_combo = QComboBox()
         self.mode_combo.addItems([self.MODE_VIDEO, self.MODE_IMAGE])
         self.mode_combo.setToolTip(
-            "Video Capture: records a video at each well with laser stimulation.\n"
-            "Image Capture: captures a single image at each well."
+            "Video Capture: records a continuous video at each well.\n"
+            "The recording spans three phases:\n"
+            "  1. Pre-laser period  (laser OFF)\n"
+            "  2. Laser ON duration\n"
+            "  3. Post-laser period (laser OFF)\n\n"
+            "Image Capture: captures a single still image at each well\n"
+            "after the dwell period. No laser stimulation."
         )
         self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
         layout.addWidget(self.mode_combo, 0, 1)
 
-        # Scan pattern
         layout.addWidget(QLabel("Scan Pattern:"), 1, 0)
         self.pattern_combo = QComboBox()
         self.pattern_combo.addItems(["Raster", "Snake"])
         self.pattern_combo.setToolTip(
             "Raster: visits wells left-to-right on every row.\n"
-            "Snake: alternates direction each row to minimise stage travel."
+            "  A1 → A2 → … → A12 → B1 → B2 → …\n\n"
+            "Snake: alternates direction each row to minimise total\n"
+            "stage travel distance.\n"
+            "  A1 → A2 → … → A12 → B12 → B11 → … → B1 → C1 → …"
         )
         layout.addWidget(self.pattern_combo, 1, 1)
 
-        # Experiment name
         layout.addWidget(QLabel("Experiment Name:"), 2, 0)
         self.exp_name_input = QLineEdit("my_experiment")
         self.exp_name_input.setToolTip(
             "A short label for this run.\n"
-            "Used to name the output folder: YYYYMMDD_HHMMSS_<name>/"
+            "Used to name the output folder:\n"
+            "  Documents/RoboCam/captures/YYYYMMDD_HHMMSS_<name>/"
         )
         self.exp_name_input.textChanged.connect(self._autosave)
         layout.addWidget(self.exp_name_input, 2, 1)
@@ -530,14 +360,17 @@ class ExperimentPanel(QWidget):
         layout.addWidget(QLabel("Dwell Period (s):"), 0, 0)
         self.dwell_input = QLineEdit("0.5")
         self.dwell_input.setToolTip(
-            "Seconds to wait after arriving at a well before any action.\n"
-            "Allows vibration from stage movement to settle.\n"
-            "Typical: 0.3–1.0 s"
+            "How long to wait after the stage arrives at a well before\n"
+            "any capture or laser action begins.\n\n"
+            "Purpose: allows mechanical vibration from the stage move\n"
+            "to settle so images are not blurred.\n\n"
+            "The laser is OFF and the camera is NOT recording during\n"
+            "this period.\n\n"
+            "Typical values: 0.3–1.0 s\n"
+            "For sensitive samples or heavy stages: 1.0–2.0 s"
         )
         self.dwell_input.textChanged.connect(self._autosave)
         layout.addWidget(self.dwell_input, 0, 1)
-        layout.addWidget(QLabel("Settle after move — laser OFF", grp), 0, 2)
-        layout.itemAtPosition(0, 2).widget().setStyleSheet(LABEL_STYLE)
 
         return grp
 
@@ -549,31 +382,39 @@ class ExperimentPanel(QWidget):
         layout.setSpacing(4)
 
         rows = [
-            ("laser_off_pre",  "2.0",  "Pre-Laser Record (s):",
-             "Seconds to record with the laser OFF before turning it on.\n"
-             "Camera is recording throughout.\nTypical: 1.0–5.0 s"),
-            ("laser_on",       "1.0",  "Laser ON Duration (s):",
-             "How long the laser stays on (stimulation window).\n"
-             "Camera is recording throughout.\nTypical: 0.5–5.0 s"),
-            ("laser_off_post", "2.0",  "Post-Laser Record (s):",
-             "Seconds to record with the laser OFF after turning it off.\n"
-             "Camera is recording throughout.\nTypical: 1.0–5.0 s"),
+            (
+                "laser_off_pre", "2.0", "Pre-Laser Record (s):",
+                "Duration of the baseline recording window BEFORE the laser turns on.\n\n"
+                "The camera is recording and the laser is OFF.\n"
+                "Use this to capture the resting state of the sample.\n\n"
+                "Typical values: 1.0–5.0 s\n"
+                "Shorter values reduce file size; longer values give more\n"
+                "baseline data for analysis."
+            ),
+            (
+                "laser_on", "1.0", "Laser ON Duration (s):",
+                "How long the laser stays on (the stimulation window).\n\n"
+                "The camera is recording throughout this period.\n"
+                "Laser turns on at the start and off at the end.\n\n"
+                "Typical values: 0.5–5.0 s\n"
+                "Depends on your experimental protocol."
+            ),
+            (
+                "laser_off_post", "2.0", "Post-Laser Record (s):",
+                "Duration of the recovery recording window AFTER the laser turns off.\n\n"
+                "The camera is recording and the laser is OFF.\n"
+                "Use this to capture the sample's response after stimulation.\n\n"
+                "Typical values: 1.0–10.0 s\n"
+                "Longer values capture slower biological responses."
+            ),
         ]
         self._video_inputs: dict[str, QLineEdit] = {}
-        labels_right = [
-            "Laser OFF — recording",
-            "Laser ON — recording",
-            "Laser OFF — recording",
-        ]
         for i, (key, default, label, tip) in enumerate(rows):
             layout.addWidget(QLabel(label), i, 0)
             edit = QLineEdit(default)
             edit.setToolTip(tip)
             edit.textChanged.connect(self._autosave)
             layout.addWidget(edit, i, 1)
-            right_lbl = QLabel(labels_right[i])
-            right_lbl.setStyleSheet(LABEL_STYLE)
-            layout.addWidget(right_lbl, i, 2)
             self._video_inputs[key] = edit
 
         return self._video_grp
@@ -589,10 +430,15 @@ class ExperimentPanel(QWidget):
         self.image_format_combo = QComboBox()
         self.image_format_combo.addItems(["PNG", "TIFF", "JPEG"])
         self.image_format_combo.setToolTip(
-            "File format for captured images.\n"
-            "PNG: lossless, good for most uses.\n"
-            "TIFF: lossless, larger files, preferred for scientific imaging.\n"
-            "JPEG: lossy, smallest files."
+            "File format for captured images.\n\n"
+            "PNG  — Lossless compression. Good general-purpose choice.\n"
+            "       Smaller files than TIFF.\n\n"
+            "TIFF — Lossless, uncompressed. Preferred for scientific\n"
+            "       imaging and downstream analysis pipelines.\n"
+            "       Largest file size.\n\n"
+            "JPEG — Lossy compression. Smallest files but introduces\n"
+            "       compression artefacts. Not recommended for\n"
+            "       quantitative analysis."
         )
         self.image_format_combo.currentTextChanged.connect(self._autosave)
         layout.addWidget(self.image_format_combo, 0, 1)
@@ -605,23 +451,31 @@ class ExperimentPanel(QWidget):
             "Save the current parameters to a JSON file or load a previously saved preset.\n"
             "Default location: Documents/RoboCam/experiment_presets/"
         )
-        layout = QHBoxLayout(grp)
+        layout = QVBoxLayout(grp)
+        layout.setSpacing(4)
 
+        btn_row = QHBoxLayout()
         save_btn = QPushButton("Save Preset…")
         save_btn.setToolTip("Save the current experiment parameters to a JSON file.")
         save_btn.clicked.connect(self._save_preset)
-        layout.addWidget(save_btn)
+        btn_row.addWidget(save_btn)
 
         load_btn = QPushButton("Load Preset…")
         load_btn.setToolTip("Load experiment parameters from a previously saved JSON file.")
         load_btn.clicked.connect(self._load_preset)
-        layout.addWidget(load_btn)
+        btn_row.addWidget(load_btn)
 
         self._preset_status = QLabel("")
         self._preset_status.setStyleSheet(STATUS_STYLE)
-        layout.addWidget(self._preset_status)
+        btn_row.addWidget(self._preset_status, stretch=1)
+        layout.addLayout(btn_row)
 
-        layout.addStretch()
+        # Gray path label below the buttons
+        path_label = QLabel(str(_default_preset_dir()))
+        path_label.setStyleSheet(LABEL_STYLE)
+        path_label.setWordWrap(True)
+        layout.addWidget(path_label)
+
         return grp
 
     def _build_controls_group(self) -> QGroupBox:
@@ -648,6 +502,7 @@ class ExperimentPanel(QWidget):
 
         self.start_btn.clicked.connect(self._start_experiment)
         self.stop_btn.clicked.connect(self._stop_experiment)
+
         return grp
 
     # ------------------------------------------------------------------
@@ -655,9 +510,9 @@ class ExperimentPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _on_mode_changed(self):
-        is_video = self.mode_combo.currentText() == self.MODE_VIDEO
-        self._video_grp.setVisible(is_video)
-        self._image_grp.setVisible(not is_video)
+        mode = self.mode_combo.currentText()
+        self._video_grp.setVisible(mode == self.MODE_VIDEO)
+        self._image_grp.setVisible(mode == self.MODE_IMAGE)
         self._autosave()
 
     # ------------------------------------------------------------------
@@ -771,7 +626,6 @@ class ExperimentPanel(QWidget):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(self._current_values(), f, indent=2)
             self._preset_status.setText(f"Saved: {Path(path).name}")
-            self._preset_status.setStyleSheet(STATUS_STYLE)
             logger.info(f"[Experiment] Preset saved to {path}")
         except OSError as e:
             QMessageBox.critical(self, "Save Error", str(e))
@@ -790,7 +644,6 @@ class ExperimentPanel(QWidget):
                 data = json.load(f)
             self._apply_values(data)
             self._preset_status.setText(f"Loaded: {Path(path).name}")
-            self._preset_status.setStyleSheet(STATUS_STYLE)
             logger.info(f"[Experiment] Preset loaded from {path}")
         except (OSError, json.JSONDecodeError) as e:
             QMessageBox.critical(self, "Load Error", str(e))
