@@ -1,0 +1,31 @@
+# RoboCam-Suite Python Dependencies
+# Python 3.7+ required
+
+# Camera and Imaging
+picamera2>=0.3.12
+opencv-python-headless>=4.5.0  # Required for capture interface video encoding (FFV1, PNG codecs) - headless version avoids Qt/GUI dependencies
+Pillow>=9.0.0  # Required for converting camera frames to tkinter PhotoImage
+numpy<2.0  # Pin to <2.0 to avoid compatibility issues with system packages compiled against numpy 1.x
+
+# System dependencies (installed via apt, not pip):
+# - ffmpeg: Required for Picamera2 high-FPS capture with hardware encoding (picamera2_highfps_capture.py)
+#   Install via: sudo apt-get install -y ffmpeg
+
+# Serial Communication
+pyserial>=3.5
+
+# GPIO Control (Raspberry Pi only)
+# Note: RPi.GPIO is installed via system package manager on Raspberry Pi
+# For development on non-Raspberry Pi systems, this can be skipped
+# RPi.GPIO>=0.7.1
+
+# Standard library dependencies (no installation needed):
+# - tkinter (usually included with Python)
+# - json
+# - threading
+# - time
+# - re
+# - csv
+# - os
+# - sys
+

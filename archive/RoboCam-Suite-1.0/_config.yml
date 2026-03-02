@@ -1,0 +1,28 @@
+# Jekyll configuration for GitHub Pages
+title: RoboCam-Suite Documentation
+description: Documentation for RoboCam-Suite - Robotic microscopy system for FluorCam, StentorCam, and other automated microscopy experiments
+theme: jekyll-theme-minimal
+plugins:
+  - jekyll-relative-links
+
+# Enable markdown processing
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
+
+# Include all markdown files
+include:
+  - "*.md"
+  - "docs/*.md"
+
+# Exclude unnecessary files
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - node_modules
+  - vendor
+  - venv
+  - .git
+  - .gitignore
+

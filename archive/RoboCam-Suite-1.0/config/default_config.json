@@ -1,0 +1,38 @@
+{
+  "hardware": {
+    "printer": {
+      "baudrate": 115200,
+      "timeout": 10.0,
+      "home_timeout": 90.0,
+      "movement_wait_timeout": 30.0,
+      "command_delay": 0.1,
+      "position_update_delay": 0.1,
+      "connection_retry_delay": 2.0,
+      "max_retries": 5
+    },
+    "laser": {
+      "gpio_pin": 21,
+      "default_state": "OFF"
+    },
+    "camera": {
+      "preview_resolution": [800, 600],
+      "default_fps": 30.0,
+      "preview_backend": "auto",
+      "pre_recording_delay": 0.5
+    }
+  },
+  "paths": {
+    "config_dir": "config",
+    "motion_config_file": "config/motion_config.json",
+    "calibration_dir": "config/calibrations",
+    "experiment_config": "experiment_config.json"
+  },
+  "logging": {
+    "log_file": "logs/robocam.log",
+    "log_level": "DEBUG",
+    "max_bytes": 10485760,
+    "backup_count": 5,
+    "console_enabled": true
+  }
+}
+

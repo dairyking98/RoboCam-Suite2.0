@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Project specific
+logs/
+*.log
+*.h264
+*.mjpeg
+*.jpeg
+*.jpg
+*.png
+*.mp4
+experiment_config.json
+experiment_points.csv
+videos/
+stills/
+a.out
+
+# Configuration (keep templates, ignore user configs)
+# config/motion_configs/*.json
+# config/templates/*.json
+!config/motion_configs/default_motion.json
+!config/motion_configs/fast_motion.json
+!config/motion_configs/precise_motion.json
+
+# Documentation build
+docs/_build/
+*.pdf
+
+# Player One SDK: track lib/ with real .so files so push-from-Windows works on Pi (no symlinks)
+# Tarball is kept in repo root by populate script but not committed (large, re-downloadable)
+PlayerOne_Camera_SDK_Linux_V3.10.0.tar.gz
+!PlayerOne_Camera_SDK_Linux_V3.10.0/lib/
+!PlayerOne_Camera_SDK_Linux_V3.10.0/lib/**
+!PlayerOne_Camera_SDK_Linux_V3.10.0/lib/**/*.so*

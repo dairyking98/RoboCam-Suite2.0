@@ -1,0 +1,39 @@
+{
+  "default": {
+    "name": "Default Profile",
+    "description": "Balanced speed and precision for general use",
+    "preliminary": {
+      "feedrate": 3000,
+      "acceleration": 500
+    },
+    "between_wells": {
+      "feedrate": 1200,
+      "acceleration": 300
+    }
+  },
+  "precise": {
+    "name": "Precise Profile",
+    "description": "Lower speed and acceleration for maximum precision",
+    "preliminary": {
+      "feedrate": 2000,
+      "acceleration": 300
+    },
+    "between_wells": {
+      "feedrate": 800,
+      "acceleration": 200
+    }
+  },
+  "fast": {
+    "name": "Fast Profile",
+    "description": "Maximum speed for rapid well-to-well movements",
+    "preliminary": {
+      "feedrate": 5000,
+      "acceleration": 1000
+    },
+    "between_wells": {
+      "feedrate": 2500,
+      "acceleration": 700
+    }
+  }
+}
+
