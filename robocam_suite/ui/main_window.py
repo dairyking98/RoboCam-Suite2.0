@@ -27,7 +27,9 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(self.tabs, stretch=1)
 
         # Add placeholder tabs
-        self.tabs.addTab(QWidget(), "Calibration")
+        from robocam_suite.ui.calibration_panel import CalibrationPanel
+        self.calibration_panel = CalibrationPanel()
+        self.tabs.addTab(self.calibration_panel, "Calibration")
         self.tabs.addTab(QWidget(), "Experiment")
         self.tabs.addTab(QWidget(), "Manual Control")
 
