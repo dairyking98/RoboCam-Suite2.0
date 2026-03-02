@@ -1,29 +1,28 @@
 """
 Setup Panel — hardware configuration and live connection status.
 
-Lets the user:
-  - Choose the camera driver (OpenCV index or PlayerOne) and test it.
-  - Choose the serial port and baud rate for the 3-D printer.
-  - Enable/disable the GPIO controller and configure its port.
-  - See a live colour-coded status indicator for every device.
-  - Connect / disconnect all hardware with a single button.
+Camera device enumeration
+--------------------------
+The camera section lists every camera device detected on the system:
+  - USB / built-in webcams via OpenCV (probes indices 0-9)
+  - Player One Astronomy cameras via the official SDK (if installed)
+  - Raspberry Pi camera via picamera2 (if running on a Pi)
 
-All settings are written back to default_config.json via ConfigManager
-and also persisted in session.json via SessionManager so they survive
-restarts.
+No camera preview is shown here; use the Calibration or Experiment tabs.
 """
-
 from __future__ import annotations
+
+import platform
+import sys
 
 import serial.tools.list_ports
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QGroupBox, QLabel, QPushButton, QComboBox, QSpinBox,
-    QCheckBox, QSizePolicy, QFrame,
+    QCheckBox, QScrollArea,
 )
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
 
 from robocam_suite.hw_manager import hw_manager
 from robocam_suite.config.config_manager import config_manager
@@ -32,15 +31,90 @@ from robocam_suite.logger import setup_logger
 
 logger = setup_logger()
 
-# Common 3-D printer baud rates in order of popularity
 PRINTER_BAUDRATES = [115200, 250000, 57600, 38400, 19200, 9600]
 ARDUINO_BAUDRATES = [9600, 115200, 57600, 38400, 19200]
 
 
+# ---------------------------------------------------------------------------
+# Camera device enumeration (runs in a background thread to avoid blocking)
+# ---------------------------------------------------------------------------
+
+class _CameraEnumerator(QThread):
+    """
+    Probes for available camera devices in a background thread.
+    Emits a list of (display_label, driver_key, device_id) tuples.
+    """
+    cameras_found = Signal(list)   # list of (label, driver, device_id)
+
+    def run(self):
+        devices = []
+
+        # --- OpenCV USB / built-in cameras ---
+        try:
+            import cv2
+            for idx in range(10):
+                cap = cv2.VideoCapture(idx)
+                if cap is not None and cap.isOpened():
+                    # Try to get a human-readable name on Windows via DirectShow
+                    name = f"Camera {idx}"
+                    try:
+                        if platform.system() == "Windows":
+                            # cv2.CAP_PROP_BACKEND_NAME not always available; use index label
+                            name = f"USB/Webcam — index {idx}"
+                        elif platform.system() == "Linux":
+                            import os
+                            v4l = f"/dev/video{idx}"
+                            if os.path.exists(v4l):
+                                name = f"Video device {idx}  ({v4l})"
+                        elif platform.system() == "Darwin":
+                            name = f"Camera {idx}  (AVFoundation)"
+                    except Exception:
+                        pass
+                    devices.append((name, "opencv", idx))
+                    cap.release()
+        except Exception as e:
+            logger.debug(f"[CameraEnum] OpenCV probe failed: {e}")
+
+        # --- Player One Astronomy cameras ---
+        try:
+            import PlayerOneCamera as poc  # type: ignore
+            count = poc.POACameraCount()
+            for i in range(count):
+                info = poc.POAGetCameraProperties(i)
+                label = f"PlayerOne — {info.cameraModelName.decode()} (index {i})"
+                devices.append((label, "playerone", i))
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"[CameraEnum] PlayerOne probe failed: {e}")
+
+        # --- Raspberry Pi camera via picamera2 ---
+        try:
+            from picamera2 import Picamera2  # type: ignore
+            cams = Picamera2.global_camera_info()
+            for i, info in enumerate(cams):
+                model = info.get("Model", "Pi Camera")
+                label = f"Raspberry Pi Camera — {model} (index {i})"
+                devices.append((label, "picamera2", i))
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"[CameraEnum] Picamera2 probe failed: {e}")
+
+        if not devices:
+            devices.append(("No cameras detected", "opencv", 0))
+
+        self.cameras_found.emit(devices)
+
+
+# ---------------------------------------------------------------------------
+# Status helpers
+# ---------------------------------------------------------------------------
+
 def _status_label(text: str = "Unknown") -> QLabel:
     lbl = QLabel(text)
     lbl.setMinimumWidth(100)
-    lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+    lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
     return lbl
 
 
@@ -56,6 +130,10 @@ def _set_status(label: QLabel, connected: bool, disabled: bool = False):
         label.setStyleSheet("color: red; font-weight: bold;")
 
 
+# ---------------------------------------------------------------------------
+# Setup Panel
+# ---------------------------------------------------------------------------
+
 class SetupPanel(QWidget):
     """Hardware configuration and live status panel."""
 
@@ -64,9 +142,23 @@ class SetupPanel(QWidget):
         self._hw = hw_manager
         self._cfg = config_manager
         self._session = session_manager
+        # Stores (label, driver, device_id) for each detected camera
+        self._camera_devices: list[tuple[str, str, int]] = []
 
-        root = QVBoxLayout(self)
+        # Make the whole panel scrollable so it works on small screens
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        inner = QWidget()
+        scroll.setWidget(inner)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+
+        root = QVBoxLayout(inner)
         root.setSpacing(10)
+        root.setContentsMargins(10, 10, 10, 10)
 
         root.addWidget(self._build_camera_group())
         root.addWidget(self._build_printer_group())
@@ -75,14 +167,16 @@ class SetupPanel(QWidget):
         root.addWidget(self._build_connect_group())
         root.addStretch()
 
-        # Populate fields from persisted session
         self._load_from_session()
 
-        # Refresh serial port lists and status every 2 s
+        # Refresh serial port list and status every 2 s
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._refresh_status)
         self._poll_timer.start(2000)
         self._refresh_status()
+
+        # Enumerate cameras in background immediately
+        self._enumerate_cameras()
 
     # ------------------------------------------------------------------
     # Group builders
@@ -92,27 +186,33 @@ class SetupPanel(QWidget):
         grp = QGroupBox("Camera")
         layout = QGridLayout(grp)
 
-        layout.addWidget(QLabel("Driver:"), 0, 0)
-        self.cam_driver_combo = QComboBox()
-        self.cam_driver_combo.addItems(["opencv", "playerone"])
-        self.cam_driver_combo.setToolTip(
-            "opencv  — standard USB / built-in webcam via OpenCV (works on all platforms).\n"
-            "playerone — Player One Astronomy USB camera via the official SDK."
+        layout.addWidget(QLabel("Detected device:"), 0, 0)
+        self.cam_device_combo = QComboBox()
+        self.cam_device_combo.setMinimumWidth(320)
+        self.cam_device_combo.setToolTip(
+            "Select a detected camera device.\n"
+            "Click 'Scan for Cameras' to refresh the list.\n\n"
+            "USB / Webcam — standard cameras via OpenCV (all platforms).\n"
+            "PlayerOne   — Player One Astronomy USB cameras (SDK required).\n"
+            "Raspberry Pi — Pi Camera Module via picamera2 (Pi only)."
         )
-        layout.addWidget(self.cam_driver_combo, 0, 1)
+        layout.addWidget(self.cam_device_combo, 0, 1)
 
-        layout.addWidget(QLabel("Camera index (OpenCV):"), 1, 0)
-        self.cam_index_spin = QSpinBox()
-        self.cam_index_spin.setRange(0, 9)
-        self.cam_index_spin.setToolTip(
-            "Index of the USB camera as seen by OpenCV.\n"
-            "0 = first camera, 1 = second, etc."
+        self.cam_scan_btn = QPushButton("Scan for Cameras")
+        self.cam_scan_btn.setToolTip(
+            "Probe all camera indices and SDK devices.\n"
+            "This may take a few seconds."
         )
-        layout.addWidget(self.cam_index_spin, 1, 1)
+        self.cam_scan_btn.clicked.connect(self._enumerate_cameras)
+        layout.addWidget(self.cam_scan_btn, 0, 2)
+
+        self.cam_scan_status = QLabel("Scanning…")
+        self.cam_scan_status.setStyleSheet("color: gray; font-size: 10px;")
+        layout.addWidget(self.cam_scan_status, 1, 0, 1, 3)
 
         self.cam_apply_btn = QPushButton("Apply & Reconnect Camera")
         self.cam_apply_btn.clicked.connect(self._apply_camera)
-        layout.addWidget(self.cam_apply_btn, 2, 0, 1, 2)
+        layout.addWidget(self.cam_apply_btn, 2, 0, 1, 3)
         return grp
 
     def _build_printer_group(self) -> QGroupBox:
@@ -235,6 +335,37 @@ class SetupPanel(QWidget):
         return grp
 
     # ------------------------------------------------------------------
+    # Camera enumeration
+    # ------------------------------------------------------------------
+
+    def _enumerate_cameras(self):
+        self.cam_scan_btn.setEnabled(False)
+        self.cam_scan_status.setText("Scanning for cameras…")
+        self._enumerator = _CameraEnumerator()
+        self._enumerator.cameras_found.connect(self._on_cameras_found)
+        self._enumerator.start()
+
+    def _on_cameras_found(self, devices: list):
+        self._camera_devices = devices
+        current_text = self.cam_device_combo.currentText()
+        self.cam_device_combo.clear()
+        for label, driver, device_id in devices:
+            self.cam_device_combo.addItem(label)
+
+        # Try to restore previous selection
+        idx = self.cam_device_combo.findText(current_text)
+        if idx >= 0:
+            self.cam_device_combo.setCurrentIndex(idx)
+
+        count = sum(1 for _, d, _ in devices if d != "opencv" or True)
+        real_count = sum(1 for lbl, _, _ in devices if "No cameras" not in lbl)
+        self.cam_scan_status.setText(
+            f"{real_count} device(s) found." if real_count else "No cameras detected."
+        )
+        self.cam_scan_btn.setEnabled(True)
+        logger.info(f"[Setup] Camera scan complete: {devices}")
+
+    # ------------------------------------------------------------------
     # Port list helpers
     # ------------------------------------------------------------------
 
@@ -263,13 +394,18 @@ class SetupPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _apply_camera(self):
-        driver = self.cam_driver_combo.currentText()
-        index = self.cam_index_spin.value()
-        self._cfg.update_section("camera", {"driver": driver, "camera_index": index})
-        self._session.update_session("setup", {"camera_driver": driver, "camera_index": index})
-        # Reset the cached instance so the next get_camera() picks up new config
+        sel_idx = self.cam_device_combo.currentIndex()
+        if sel_idx < 0 or sel_idx >= len(self._camera_devices):
+            return
+        label, driver, device_id = self._camera_devices[sel_idx]
+        self._cfg.update_section("camera", {"driver": driver, "camera_index": device_id})
+        self._session.update_session("setup", {
+            "camera_driver": driver,
+            "camera_index": device_id,
+            "camera_label": label,
+        })
         self._hw._camera = None
-        logger.info(f"Camera config updated: driver={driver}, index={index}")
+        logger.info(f"Camera config updated: driver={driver}, device_id={device_id} ({label})")
 
     def _apply_printer(self):
         port = self.printer_port_combo.currentText() or "auto"
@@ -333,7 +469,7 @@ class SetupPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _on_gpio_enabled_changed(self, state):
-        self._set_gpio_widgets_enabled(state == Qt.Checked.value)
+        self._set_gpio_widgets_enabled(bool(state))
 
     def _set_gpio_widgets_enabled(self, enabled: bool):
         for w in (self.gpio_port_combo, self.gpio_baud_combo,
@@ -347,11 +483,11 @@ class SetupPanel(QWidget):
     def _load_from_session(self):
         s = self._session.get_session("setup")
 
-        # Camera
-        idx = self.cam_driver_combo.findText(s.get("camera_driver", "opencv"))
-        if idx >= 0:
-            self.cam_driver_combo.setCurrentIndex(idx)
-        self.cam_index_spin.setValue(s.get("camera_index", 0))
+        # Camera — restore saved label if present; actual list populated after scan
+        saved_label = s.get("camera_label", "")
+        if saved_label:
+            self.cam_device_combo.addItem(saved_label)
+            self.cam_scan_status.setText("Previous device restored. Click 'Scan' to refresh.")
 
         # Printer ports
         self._refresh_printer_ports()

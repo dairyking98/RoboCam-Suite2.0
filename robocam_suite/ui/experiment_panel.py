@@ -1,34 +1,38 @@
 """
 Experiment Panel — configure, select wells, and run well-plate imaging experiments.
 
-Layout order (top to bottom)
------------------------------
-1. Well Selection  — loaded from calibration; Shift/Ctrl-click supported.
-2. Experiment Parameters — timing fields only (no rows/cols here).
-3. Presets — saved to Documents/RoboCam/experiment_presets/.
-4. Run controls.
+Three-column layout
+--------------------
+Column 1 (large)  : Live camera preview — same feed as Calibration tab.
+Column 2 (medium) : Experiment parameters, presets, and run controls.
+Column 3 (medium) : Well selection grid with drag-to-toggle interaction.
 
-Well Selection click behaviour
---------------------------------
-- Plain click      : toggle well + set range anchor.
-- Shift + click    : rectangular range select/deselect from anchor to here.
-- Ctrl  + click    : additive individual toggle (anchor unchanged).
-
-Note: modifier detection uses mousePressEvent on each button, NOT the
-clicked() signal, because Qt clears modifier state before clicked fires.
+Well selection interaction
+--------------------------
+- Click and drag over wells to toggle them.
+- The target state is determined by the FIRST well touched in each drag:
+    if it was selected → the drag deselects all wells it passes over.
+    if it was deselected → the drag selects all wells it passes over.
+- This mirrors the behaviour of painting tools in image editors.
+- Check All / Uncheck All / Invert buttons are also available.
+- Well dimensions are synced from the Calibration tab.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QGridLayout, QLabel, QLineEdit, QGroupBox, QSpinBox,
-    QComboBox, QInputDialog, QMessageBox, QScrollArea,
+    QGridLayout, QLabel, QLineEdit, QGroupBox,
+    QComboBox, QInputDialog, QMessageBox,
+    QScrollArea, QSplitter, QSizePolicy,
 )
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtCore import Qt, QThread, Signal, QPoint
+from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QMouseEvent
+
+import cv2
 
 from robocam_suite.hw_manager import hw_manager
 from robocam_suite.experiments.experiment import Experiment
@@ -42,14 +46,86 @@ CORNER_NAMES = ["Upper-Left", "Lower-Left", "Upper-Right", "Lower-Right"]
 
 
 def _default_preset_dir() -> Path:
-    return Path.home() / "Documents" / "RoboCam" / "experiment_presets"
+    d = Path.home() / "Documents" / "RoboCam" / "experiment_presets"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# ---------------------------------------------------------------------------
+# Camera frame grabber (shared pattern with CalibrationPanel)
+# ---------------------------------------------------------------------------
+
+class _FrameGrabber(QThread):
+    frame_ready = Signal(QImage)
+
+    def __init__(self, fps: int = 15):
+        super().__init__()
+        self._fps = fps
+        self._running = False
+
+    def stop(self):
+        self._running = False
+
+    def run(self):
+        self._running = True
+        interval_ms = max(1, int(1000 / self._fps))
+        camera = hw_manager.get_camera()
+        while self._running:
+            try:
+                if camera.is_connected:
+                    frame = camera.read_frame()
+                    if frame is not None:
+                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        h, w, ch = rgb.shape
+                        qimg = QImage(
+                            rgb.data.tobytes(), w, h, ch * w,
+                            QImage.Format.Format_RGB888
+                        )
+                        self.frame_ready.emit(qimg.copy())
+            except Exception:
+                pass
+            self.msleep(interval_ms)
+
+
+class _LivePreview(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumSize(320, 240)
+        self._pixmap: Optional[QPixmap] = None
+        lbl = QLabel("Camera not connected", self)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setStyleSheet("color: gray; font-size: 13px;")
+        self._no_cam_lbl = lbl
+        layout = QVBoxLayout(self)
+        layout.addWidget(lbl)
+
+    def update_frame(self, qimg: QImage):
+        self._pixmap = QPixmap.fromImage(qimg)
+        self._no_cam_lbl.hide()
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        w, h = self.width(), self.height()
+        if self._pixmap:
+            scaled = self._pixmap.scaled(
+                w, h,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            x_off = (w - scaled.width()) // 2
+            y_off = (h - scaled.height()) // 2
+            painter.drawPixmap(x_off, y_off, scaled)
+        else:
+            painter.fillRect(0, 0, w, h, QColor(30, 30, 30))
+        painter.end()
 
 
 # ---------------------------------------------------------------------------
 # Background experiment runner
 # ---------------------------------------------------------------------------
 
-class ExperimentRunner(QThread):
+class _ExperimentRunner(QThread):
     progress = Signal(str)
     finished = Signal()
 
@@ -66,12 +142,16 @@ class ExperimentRunner(QThread):
 
 
 # ---------------------------------------------------------------------------
-# Well toggle button — captures mouse modifiers in mousePressEvent
+# Well toggle button — supports drag-to-toggle via mouse tracking
 # ---------------------------------------------------------------------------
 
 class _WellButton(QPushButton):
-    # Emits (row, col, Qt.KeyboardModifiers)
-    well_pressed = Signal(int, int, object)
+    """
+    A well toggle button that emits enter_while_pressed(row, col) when the
+    mouse enters it while the left button is held down.  The parent widget
+    uses this to implement drag-to-paint selection.
+    """
+    enter_while_pressed = Signal(int, int)
 
     SELECTED_STYLE = (
         "background-color: #2a7ae2; color: white; border: 1px solid #1a5ab2; "
@@ -89,6 +169,8 @@ class _WellButton(QPushButton):
         self._selected = True
         self.setFixedSize(36, 24)
         self._apply_style()
+        # Track mouse so enterEvent fires even during drag
+        self.setMouseTracking(True)
 
     def _apply_style(self):
         self.setStyleSheet(
@@ -105,35 +187,39 @@ class _WellButton(QPushButton):
         self._selected = value
         self._apply_style()
 
-    def mousePressEvent(self, event: QMouseEvent):
-        # Capture modifiers HERE — before Qt clears them in the base handler
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.well_pressed.emit(self._row, self._col, event.modifiers())
-        super().mousePressEvent(event)
+    def enterEvent(self, event):
+        # Check if left mouse button is held anywhere in the application
+        from PySide6.QtWidgets import QApplication
+        if QApplication.mouseButtons() & Qt.MouseButton.LeftButton:
+            self.enter_while_pressed.emit(self._row, self._col)
+        super().enterEvent(event)
 
 
 # ---------------------------------------------------------------------------
-# Well selection widget
+# Well selection widget — drag-to-toggle
 # ---------------------------------------------------------------------------
 
 class WellSelectionWidget(QGroupBox):
     """
-    Interactive grid of toggle buttons driven by calibration dimensions.
-    Dimensions are set externally via rebuild(); the widget never owns rows/cols.
+    Interactive grid of toggle buttons.
+    Drag behaviour: the first well touched in a drag determines the target
+    state for the entire drag stroke (paint-bucket style).
     """
 
     def __init__(self, parent=None):
         super().__init__("Well Selection", parent)
         self.setToolTip(
-            "Click a well to toggle it.\n"
-            "Shift-click to select a rectangular range.\n"
-            "Ctrl-click to toggle individual wells additively.\n"
-            "Only selected (blue) wells will be visited during the experiment."
+            "Click and drag over wells to select or deselect them.\n"
+            "The first well you touch sets the target state for the whole drag:\n"
+            "  • If it was selected → the drag deselects all wells it passes over.\n"
+            "  • If it was deselected → the drag selects all wells it passes over.\n\n"
+            "Use Check All / Uncheck All / Invert for bulk operations.\n"
+            "Click 'Sync from Calibration' to match the grid to your plate."
         )
         self._rows = 8
         self._cols = 12
         self._buttons: dict[tuple[int, int], _WellButton] = {}
-        self._anchor: tuple[int, int] | None = None
+        self._drag_target_state: Optional[bool] = None  # None = no drag in progress
 
         outer = QVBoxLayout(self)
         outer.setSpacing(4)
@@ -142,26 +228,20 @@ class WellSelectionWidget(QGroupBox):
         # Toolbar
         toolbar = QHBoxLayout()
         check_all_btn = QPushButton("Check All")
-        check_all_btn.setToolTip("Select all wells.")
         check_all_btn.clicked.connect(self.check_all)
         toolbar.addWidget(check_all_btn)
-
         uncheck_all_btn = QPushButton("Uncheck All")
-        uncheck_all_btn.setToolTip("Deselect all wells.")
         uncheck_all_btn.clicked.connect(self.uncheck_all)
         toolbar.addWidget(uncheck_all_btn)
-
         invert_btn = QPushButton("Invert")
-        invert_btn.setToolTip("Invert the current selection.")
         invert_btn.clicked.connect(self.invert)
         toolbar.addWidget(invert_btn)
-
         self._count_label = QLabel("")
         self._count_label.setStyleSheet("font-size: 10px; color: gray;")
         toolbar.addWidget(self._count_label, stretch=1)
         outer.addLayout(toolbar)
 
-        # Scrollable grid — no fixed height cap; expands to fill available space
+        # Scrollable grid
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -180,13 +260,10 @@ class WellSelectionWidget(QGroupBox):
     # ------------------------------------------------------------------
 
     def rebuild(self, rows: int, cols: int):
-        """Rebuild the grid for a new plate size, preserving selection where possible."""
-        old: dict[tuple[int, int], bool] = {
-            pos: btn.is_selected for pos, btn in self._buttons.items()
-        }
+        old = {pos: btn.is_selected for pos, btn in self._buttons.items()}
         self._rows = rows
         self._cols = cols
-        self._anchor = None
+        self._drag_target_state = None
         self._rebuild_grid(old)
 
     def check_all(self):
@@ -228,7 +305,11 @@ class WellSelectionWidget(QGroupBox):
 
     def _rebuild_grid(self, old: dict | None = None):
         for btn in self._buttons.values():
-            btn.well_pressed.disconnect()
+            try:
+                btn.enter_while_pressed.disconnect()
+                btn.pressed.disconnect()
+            except RuntimeError:
+                pass
             btn.deleteLater()
         self._buttons.clear()
 
@@ -257,41 +338,40 @@ class WellSelectionWidget(QGroupBox):
                 btn = _WellButton(label, row, col)
                 if old is not None:
                     btn.set_selected(old.get((row, col), True))
-                # Connect via well_pressed — modifiers captured in mousePressEvent
-                btn.well_pressed.connect(self._on_well_pressed)
+                # pressed fires when the button is first clicked — starts a drag
+                btn.pressed.connect(
+                    lambda r=row, c=col: self._on_drag_start(r, c)
+                )
+                # enter_while_pressed fires when mouse enters during a drag
+                btn.enter_while_pressed.connect(self._on_drag_enter)
                 self._grid_layout.addWidget(btn, row + 1, col + 1)
                 self._buttons[(row, col)] = btn
 
         self._update_count()
 
     # ------------------------------------------------------------------
-    # Click handling — modifiers arrive reliably here
+    # Drag-to-toggle logic
     # ------------------------------------------------------------------
 
-    def _on_well_pressed(self, row: int, col: int, modifiers):
-        shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
-        ctrl  = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
-        btn   = self._buttons[(row, col)]
-
-        if shift and self._anchor is not None:
-            # Rectangular range: target state = opposite of anchor's current state
-            r0, c0 = self._anchor
-            target = not self._buttons[self._anchor].is_selected
-            for r in range(min(r0, row), max(r0, row) + 1):
-                for c in range(min(c0, col), max(c0, col) + 1):
-                    self._buttons[(r, c)].set_selected(target)
-            # Anchor stays at original position
-
-        elif ctrl:
-            # Additive individual toggle — anchor unchanged
-            btn.set_selected(not btn.is_selected)
-
-        else:
-            # Plain click — toggle and move anchor
-            btn.set_selected(not btn.is_selected)
-            self._anchor = (row, col)
-
+    def _on_drag_start(self, row: int, col: int):
+        """Called when the user first presses a well button."""
+        btn = self._buttons[(row, col)]
+        # The target state is the OPPOSITE of the first-touched well's current state
+        self._drag_target_state = not btn.is_selected
+        btn.set_selected(self._drag_target_state)
         self._update_count()
+
+    def _on_drag_enter(self, row: int, col: int):
+        """Called when the mouse enters a well while the button is held."""
+        if self._drag_target_state is None:
+            return
+        self._buttons[(row, col)].set_selected(self._drag_target_state)
+        self._update_count()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        """End the drag stroke when the mouse button is released."""
+        self._drag_target_state = None
+        super().mouseReleaseEvent(event)
 
     def _update_count(self):
         total = len(self._buttons)
@@ -300,7 +380,7 @@ class WellSelectionWidget(QGroupBox):
 
 
 # ---------------------------------------------------------------------------
-# Helper: labelled parameter field with tooltip badge
+# Helper: labelled parameter row
 # ---------------------------------------------------------------------------
 
 def _field(label_text: str, default: str, tooltip: str,
@@ -326,45 +406,82 @@ def _field(label_text: str, default: str, tooltip: str,
 # ---------------------------------------------------------------------------
 
 class ExperimentPanel(QWidget):
-    """Configure, select wells, and run a well-plate imaging experiment."""
+    """Three-column experiment panel: live preview | settings | well selection."""
 
     def __init__(self, parent=None, calibration_panel=None):
         super().__init__(parent)
         self.calibration_panel = calibration_panel
-        self.experiment_runner: ExperimentRunner | None = None
+        self.experiment_runner: Optional[_ExperimentRunner] = None
         self._session = session_manager
 
-        root = QVBoxLayout(self)
-        root.setSpacing(6)
-        root.setContentsMargins(6, 6, 6, 6)
+        splitter = QSplitter(Qt.Orientation.Horizontal, self)
 
-        # 1. Well selection — top, takes most vertical space
-        self.well_selection = WellSelectionWidget()
-        root.addWidget(self.well_selection, stretch=3)
+        # ---- Column 1: Live camera preview --------------------------------
+        col1 = QWidget()
+        col1_layout = QVBoxLayout(col1)
+        col1_layout.setContentsMargins(0, 0, 4, 0)
+        cam_label = QLabel("Live Camera Preview")
+        cam_label.setStyleSheet("font-weight: bold; font-size: 11px;")
+        col1_layout.addWidget(cam_label)
+        self._live_preview = _LivePreview()
+        col1_layout.addWidget(self._live_preview, stretch=1)
+        splitter.addWidget(col1)
 
-        # Sync button just above the well grid
-        sync_row = QHBoxLayout()
-        sync_btn = QPushButton("Sync Well Grid from Calibration")
+        # ---- Column 2: Settings (scrollable) ------------------------------
+        col2_inner = QWidget()
+        col2_layout = QVBoxLayout(col2_inner)
+        col2_layout.setSpacing(6)
+        col2_layout.setContentsMargins(4, 4, 4, 4)
+        col2_layout.addWidget(self._build_params_group())
+        col2_layout.addWidget(self._build_presets_group())
+        col2_layout.addWidget(self._build_controls_group())
+        col2_layout.addStretch()
+
+        col2_scroll = QScrollArea()
+        col2_scroll.setWidgetResizable(True)
+        col2_scroll.setWidget(col2_inner)
+        col2_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        splitter.addWidget(col2_scroll)
+
+        # ---- Column 3: Well selection -------------------------------------
+        col3 = QWidget()
+        col3_layout = QVBoxLayout(col3)
+        col3_layout.setContentsMargins(4, 4, 4, 4)
+        col3_layout.setSpacing(4)
+
+        sync_btn = QPushButton("Sync Grid from Calibration")
         sync_btn.setToolTip(
             "Load the well-plate dimensions from the Calibration tab\n"
             "and rebuild this selection grid to match."
         )
         sync_btn.clicked.connect(self._sync_from_calibration)
-        sync_row.addWidget(sync_btn)
-        sync_row.addStretch()
-        # Insert above well_selection
-        root.insertLayout(0, sync_row)
+        col3_layout.addWidget(sync_btn)
 
-        # 2. Parameters
-        root.addWidget(self._build_params_group(), stretch=0)
+        self.well_selection = WellSelectionWidget()
+        col3_layout.addWidget(self.well_selection, stretch=1)
+        splitter.addWidget(col3)
 
-        # 3. Presets
-        root.addWidget(self._build_presets_group(), stretch=0)
+        # Proportions: camera ~40%, settings ~30%, wells ~30%
+        splitter.setSizes([480, 360, 360])
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 1)
 
-        # 4. Run controls
-        root.addWidget(self._build_controls_group(), stretch=0)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(splitter)
 
         self._load_from_session()
+
+        # Camera frame grabber
+        self._grabber = _FrameGrabber(fps=15)
+        self._grabber.frame_ready.connect(self._live_preview.update_frame)
+        self._grabber.start()
+
+    def closeEvent(self, event):
+        self._grabber.stop()
+        self._grabber.wait(1000)
+        super().closeEvent(event)
 
     # ------------------------------------------------------------------
     # Group builders
@@ -382,32 +499,36 @@ class ExperimentPanel(QWidget):
             "Used to name the output folder: YYYYMMDD_HHMMSS_<name>/"
         )
         layout.addWidget(self.exp_name_input, 0, 1)
-        name_badge = QLabel("?")
-        name_badge.setToolTip(self.exp_name_input.toolTip())
-        name_badge.setStyleSheet(
+        badge = QLabel("?")
+        badge.setToolTip(self.exp_name_input.toolTip())
+        badge.setStyleSheet(
             "color: white; background: #555; border-radius: 8px; "
             "padding: 1px 5px; font-weight: bold;"
         )
-        layout.addWidget(name_badge, 0, 2)
+        layout.addWidget(badge, 0, 2)
 
         self.param_inputs: dict[str, QLineEdit] = {}
         timing_params = [
             ("pre_laser_delay", "0.5",
              "Pre-Laser Delay (s):",
              "Seconds to wait after arriving at a well before turning the laser on.\n"
-             "Allows vibration from movement to settle before imaging."),
+             "Allows vibration from movement to settle before imaging.\n"
+             "Typical: 0.3–1.0 s"),
             ("laser_on_duration", "1.0",
              "Laser On Duration (s):",
              "How long the laser stays on per well (in seconds).\n"
-             "This is the stimulation or illumination window."),
+             "This is the stimulation or illumination window.\n"
+             "Typical: 0.5–5.0 s"),
             ("recording_duration", "5.0",
              "Recording Duration (s):",
              "How long the camera records video at each well (in seconds).\n"
-             "Recording starts when the laser turns on."),
+             "Recording starts when the laser turns on.\n"
+             "Typical: 2.0–30.0 s"),
             ("post_well_delay", "0.5",
              "Post-Well Delay (s):",
              "Seconds to wait after finishing a well before moving to the next.\n"
-             "Useful for letting the sample recover or settle."),
+             "Useful for letting the sample recover or settle.\n"
+             "Typical: 0.0–2.0 s"),
         ]
         for i, (key, default, label_text, tip) in enumerate(timing_params):
             edit = _field(label_text, default, tip, layout, i + 1)
@@ -421,7 +542,7 @@ class ExperimentPanel(QWidget):
         grp = QGroupBox("Presets")
         grp.setToolTip(
             "Save the current parameters as a named preset.\n"
-            f"Presets are stored in Documents/RoboCam/experiment_presets/"
+            "Presets are stored in Documents/RoboCam/experiment_presets/"
         )
         layout = QHBoxLayout(grp)
 
@@ -431,7 +552,7 @@ class ExperimentPanel(QWidget):
         layout.addWidget(self.preset_combo)
 
         load_btn = QPushButton("Load")
-        load_btn.setToolTip("Load the selected preset into the fields above.")
+        load_btn.setToolTip("Load the selected preset.")
         load_btn.clicked.connect(self._load_preset)
         layout.addWidget(load_btn)
 
@@ -482,7 +603,7 @@ class ExperimentPanel(QWidget):
             return
         cols, rows = self.calibration_panel.get_well_dimensions()
         self.well_selection.rebuild(rows, cols)
-        logger.info(f"[Experiment] Synced well grid from calibration: {rows}×{cols}")
+        logger.info(f"[Experiment] Synced well grid: {rows} rows × {cols} cols")
 
     # ------------------------------------------------------------------
     # Experiment control
@@ -502,15 +623,11 @@ class ExperimentPanel(QWidget):
             corners.append(pos)
 
         cols, rows = self.calibration_panel.get_well_dimensions()
-
         selected_indices = self.well_selection.get_selected_indices()
         if not selected_indices:
             QMessageBox.warning(self, "No Wells Selected",
                                 "Please select at least one well before starting.")
             return
-
-        selected_labels = self.well_selection.get_selected_labels()
-        logger.info(f"[Experiment] Running on {len(selected_indices)} wells: {selected_labels}")
 
         try:
             params = {k: float(v.text()) for k, v in self.param_inputs.items()}
@@ -522,7 +639,7 @@ class ExperimentPanel(QWidget):
             self.status_label.setText(f"Status: Error — {e}")
             return
 
-        self.experiment_runner = ExperimentRunner(experiment)
+        self.experiment_runner = _ExperimentRunner(experiment)
         self.experiment_runner.finished.connect(self._on_experiment_finished)
         self.experiment_runner.start()
         self.start_btn.setEnabled(False)
@@ -541,13 +658,8 @@ class ExperimentPanel(QWidget):
         self.experiment_runner = None
 
     # ------------------------------------------------------------------
-    # Presets — stored as JSON files in Documents/RoboCam/experiment_presets/
+    # Presets
     # ------------------------------------------------------------------
-
-    def _preset_dir(self) -> Path:
-        d = _default_preset_dir()
-        d.mkdir(parents=True, exist_ok=True)
-        return d
 
     def _current_values(self) -> dict:
         d = {k: v.text() for k, v in self.param_inputs.items()}
@@ -562,8 +674,7 @@ class ExperimentPanel(QWidget):
 
     def _refresh_presets(self):
         self.preset_combo.clear()
-        preset_dir = self._preset_dir()
-        for f in sorted(preset_dir.glob("*.json")):
+        for f in sorted(_default_preset_dir().glob("*.json")):
             self.preset_combo.addItem(f.stem)
 
     def _save_preset(self):
@@ -571,7 +682,7 @@ class ExperimentPanel(QWidget):
         if not ok or not name.strip():
             return
         name = name.strip()
-        path = self._preset_dir() / f"{name}.json"
+        path = _default_preset_dir() / f"{name}.json"
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(self._current_values(), f, indent=2)
@@ -587,7 +698,7 @@ class ExperimentPanel(QWidget):
         name = self.preset_combo.currentText()
         if not name:
             return
-        path = self._preset_dir() / f"{name}.json"
+        path = _default_preset_dir() / f"{name}.json"
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -604,12 +715,11 @@ class ExperimentPanel(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            path = self._preset_dir() / f"{name}.json"
-            path.unlink(missing_ok=True)
+            (_default_preset_dir() / f"{name}.json").unlink(missing_ok=True)
             self._refresh_presets()
 
     # ------------------------------------------------------------------
-    # Session persistence (timing params + name only — not well selection)
+    # Session persistence
     # ------------------------------------------------------------------
 
     def _autosave(self):

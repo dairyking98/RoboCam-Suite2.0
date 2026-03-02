@@ -1,18 +1,17 @@
 """
-Calibration Panel — jog the stage, record well-plate corners, preview the
-well path, and save/load calibration files.
+Calibration Panel — jog the stage, record well-plate corners, and navigate wells.
 
-Layout
-------
-Left (large)  : live camera preview — close-up of the current well position.
-Right (narrow): movement controls, corner recording, well-plate map, save/load.
+Three-column layout
+--------------------
+Column 1 (large)  : Live camera preview — close-up of whatever the camera sees.
+Column 2 (medium) : Movement controls, Go-To XYZ, corner calibration, save/load.
+Column 3 (medium) : Well Map — compact clickable grid; click any well to go there.
 
 Well-plate map
 --------------
-A compact grid of small buttons, one per well, generated after all four corners
-are set.  Clicking any button in the map moves the stage directly to that well.
-This is separate from the live camera feed which always shows what the camera
-sees right now.
+Generated after all four corners are set (or loaded from file).
+Clicking any button moves the stage to that well's computed XYZ position.
+The map is separate from the live camera feed.
 """
 from __future__ import annotations
 
@@ -28,7 +27,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
-from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
+from PySide6.QtGui import QImage, QPixmap, QPainter, QColor
 
 import cv2
 
@@ -42,7 +41,7 @@ logger = setup_logger()
 STEP_PRESETS = ["0.1", "0.5", "1.0", "5.0", "10.0"]
 CORNER_NAMES = ["Upper-Left", "Lower-Left", "Upper-Right", "Lower-Right"]
 
-# Default calibration save directory
+
 def _default_cal_dir() -> Path:
     return Path.home() / "Documents" / "RoboCam" / "calibrations"
 
@@ -84,13 +83,13 @@ class _FrameGrabber(QThread):
 
 
 # ---------------------------------------------------------------------------
-# Live camera preview widget  (no overlay — just the raw feed)
+# Live camera preview widget
 # ---------------------------------------------------------------------------
 
 class _LivePreview(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(400, 300)
+        self.setMinimumSize(320, 240)
         self._pixmap: Optional[QPixmap] = None
         lbl = QLabel("Camera not connected", self)
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -153,11 +152,9 @@ class _WellMapButton(QPushButton):
 class WellMapWidget(QGroupBox):
     """
     Compact grid of buttons representing the well plate.
-    After calibration is complete, clicking any button moves the stage to
-    that well's computed XYZ position.
+    Clicking any button moves the stage to that well's computed XYZ position.
     """
-
-    well_clicked = Signal(float, float, float)   # emits (x, y, z) of the chosen well
+    well_clicked = Signal(float, float, float)
 
     def __init__(self, parent=None):
         super().__init__("Well Map  (click to go to well)", parent)
@@ -173,7 +170,6 @@ class WellMapWidget(QGroupBox):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        # No fixed height cap — expands to fill available space in the splitter
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         inner = QWidget()
@@ -181,26 +177,16 @@ class WellMapWidget(QGroupBox):
         scroll.setWidget(inner)
 
         outer = QVBoxLayout(self)
+        outer.setContentsMargins(4, 4, 4, 4)
         outer.addWidget(scroll, stretch=1)
 
-        self._placeholder = QLabel("Set all four corners to generate the map.")
+        self._placeholder = QLabel("Set all four corners\nand click Generate\nto build the map.")
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._placeholder.setStyleSheet("color: gray; font-size: 10px;")
         outer.addWidget(self._placeholder)
 
     def build(self, rows: int, cols: int,
               positions: list[tuple[float, float, float]]):
-        """
-        Build or rebuild the map grid.
-
-        Parameters
-        ----------
-        rows, cols : int
-            Well-plate dimensions.
-        positions : list of (x, y, z)
-            Flat list of positions in row-major order (len == rows * cols).
-        """
-        # Clear old buttons
         for btn in self._buttons.values():
             btn.deleteLater()
         self._buttons.clear()
@@ -212,7 +198,6 @@ class WellMapWidget(QGroupBox):
 
         self._placeholder.hide()
 
-        # Column headers
         for col in range(cols):
             lbl = QLabel(str(col + 1))
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -226,7 +211,6 @@ class WellMapWidget(QGroupBox):
             hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
             hdr.setStyleSheet("font-size: 8px; color: gray;")
             self._layout.addWidget(hdr, row + 1, 0)
-
             for col in range(cols):
                 label = f"{row_letter}{col + 1}"
                 pos = positions[idx] if idx < len(positions) else (0.0, 0.0, 0.0)
@@ -257,8 +241,10 @@ class WellMapWidget(QGroupBox):
 
 class CalibrationPanel(QWidget):
     """
-    Jog controls, Go-To XYZ, corner recording, live camera preview,
-    well-plate map, and save/load calibration files.
+    Three-column layout:
+      Col 1 — Live camera preview (large)
+      Col 2 — Movement controls + corner calibration + save/load
+      Col 3 — Well map (full height)
     """
 
     def __init__(self, parent=None):
@@ -266,42 +252,69 @@ class CalibrationPanel(QWidget):
         self.hw_manager = hw_manager
         self._session = session_manager
 
-        # ---- Top-level horizontal splitter --------------------------------
+        # Top-level horizontal splitter — three panes
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
 
-        # LEFT — large live camera preview
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 4, 0)
+        # ---- Column 1: Live camera preview --------------------------------
+        col1 = QWidget()
+        col1_layout = QVBoxLayout(col1)
+        col1_layout.setContentsMargins(0, 0, 4, 0)
         cam_label = QLabel("Live Camera Preview")
         cam_label.setStyleSheet("font-weight: bold; font-size: 11px;")
-        left_layout.addWidget(cam_label)
+        col1_layout.addWidget(cam_label)
         self._live_preview = _LivePreview()
-        left_layout.addWidget(self._live_preview, stretch=1)
-        splitter.addWidget(left)
+        col1_layout.addWidget(self._live_preview, stretch=1)
+        splitter.addWidget(col1)
 
-        # RIGHT — controls
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setSpacing(6)
-        right_layout.setContentsMargins(4, 0, 0, 0)
-        right_layout.addWidget(self._build_movement_group())
-        right_layout.addWidget(self._build_calibration_group())
-        right_layout.addWidget(self._build_well_map_group())
-        right_layout.addWidget(self._build_save_load_group())
-        right_layout.addWidget(QuickCaptureWidget("Quick Capture"))
-        right_layout.addStretch()
+        # ---- Column 2: Controls (scrollable) ------------------------------
+        col2_inner = QWidget()
+        col2_layout = QVBoxLayout(col2_inner)
+        col2_layout.setSpacing(6)
+        col2_layout.setContentsMargins(4, 4, 4, 4)
+        col2_layout.addWidget(self._build_movement_group())
+        col2_layout.addWidget(self._build_calibration_group())
+        col2_layout.addWidget(self._build_save_load_group())
+        col2_layout.addWidget(QuickCaptureWidget("Quick Capture"))
+        col2_layout.addStretch()
 
-        # Make the right side scrollable
-        right_scroll = QScrollArea()
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setWidget(right)
-        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        splitter.addWidget(right_scroll)
+        col2_scroll = QScrollArea()
+        col2_scroll.setWidgetResizable(True)
+        col2_scroll.setWidget(col2_inner)
+        col2_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        splitter.addWidget(col2_scroll)
 
-        splitter.setSizes([520, 380])
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 0)
+        # ---- Column 3: Well map (full height) -----------------------------
+        col3 = QWidget()
+        col3_layout = QVBoxLayout(col3)
+        col3_layout.setContentsMargins(4, 4, 4, 4)
+        col3_layout.setSpacing(4)
+
+        map_btn_row = QHBoxLayout()
+        gen_btn = QPushButton("Generate Well Map")
+        gen_btn.setToolTip(
+            "Compute all well positions from the four corners and populate\n"
+            "the map. Requires all four corners to be set."
+        )
+        gen_btn.clicked.connect(self._generate_well_map)
+        map_btn_row.addWidget(gen_btn)
+        clear_btn = QPushButton("Clear")
+        clear_btn.setToolTip("Remove the well map.")
+        clear_btn.setFixedWidth(50)
+        clear_btn.clicked.connect(lambda: self.well_map.clear())
+        map_btn_row.addWidget(clear_btn)
+        col3_layout.addLayout(map_btn_row)
+
+        self.well_map = WellMapWidget()
+        self.well_map.well_clicked.connect(self._goto_xyz)
+        col3_layout.addWidget(self.well_map, stretch=1)
+
+        splitter.addWidget(col3)
+
+        # Proportions: camera gets ~45%, controls ~30%, map ~25%
+        splitter.setSizes([540, 360, 300])
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 1)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -333,7 +346,7 @@ class CalibrationPanel(QWidget):
         layout = QGridLayout(grp)
         layout.setSpacing(4)
 
-        # ---- Current position display ----
+        # Current position display
         pos_row = QHBoxLayout()
         pos_row.addWidget(QLabel("X:"))
         self.x_pos_label = QLabel("0.00")
@@ -350,37 +363,32 @@ class CalibrationPanel(QWidget):
         pos_row.addStretch()
         layout.addLayout(pos_row, 0, 0, 1, 5)
 
-        # ---- XY jog pad ----
+        # XY jog pad
         self.y_plus_btn = QPushButton("Y+")
         self.y_plus_btn.setToolTip("Move stage in the +Y direction by the selected step size.")
         layout.addWidget(self.y_plus_btn, 1, 1)
-
         self.x_minus_btn = QPushButton("X-")
         self.x_minus_btn.setToolTip("Move stage in the -X direction.")
         layout.addWidget(self.x_minus_btn, 2, 0)
-
         self.home_btn = QPushButton("Home")
         self.home_btn.setToolTip("Send G28 — home all axes to their endstops.")
         layout.addWidget(self.home_btn, 2, 1)
-
         self.x_plus_btn = QPushButton("X+")
         self.x_plus_btn.setToolTip("Move stage in the +X direction.")
         layout.addWidget(self.x_plus_btn, 2, 2)
-
         self.y_minus_btn = QPushButton("Y-")
         self.y_minus_btn.setToolTip("Move stage in the -Y direction.")
         layout.addWidget(self.y_minus_btn, 3, 1)
 
-        # ---- Z jog ----
+        # Z jog
         self.z_plus_btn = QPushButton("Z+")
         self.z_plus_btn.setToolTip("Move stage up (+Z).")
         layout.addWidget(self.z_plus_btn, 1, 3)
-
         self.z_minus_btn = QPushButton("Z-")
         self.z_minus_btn.setToolTip("Move stage down (-Z).")
         layout.addWidget(self.z_minus_btn, 3, 3)
 
-        # ---- Step size ----
+        # Step size
         step_grp = QGroupBox("Step Size (mm)")
         step_grp.setToolTip(
             "Distance the stage moves per button press.\n"
@@ -407,39 +415,33 @@ class CalibrationPanel(QWidget):
         self.step_size_input.textEdited.connect(self._on_custom_step_edited)
         layout.addWidget(step_grp, 4, 0, 1, 5)
 
-        # ---- Go-To XYZ ----
+        # Go-To XYZ
         goto_grp = QGroupBox("Go To Position")
         goto_grp.setToolTip(
             "Enter absolute XYZ coordinates and press Go to move the stage\n"
-            "directly to that position (G0 absolute move)."
+            "directly to that position (G90 + G0 X… Y… Z…)."
         )
         goto_layout = QHBoxLayout(goto_grp)
         goto_layout.addWidget(QLabel("X:"))
         self.goto_x = QLineEdit("0.0")
         self.goto_x.setFixedWidth(55)
-        self.goto_x.setToolTip("Target X coordinate in mm.")
         goto_layout.addWidget(self.goto_x)
         goto_layout.addWidget(QLabel("Y:"))
         self.goto_y = QLineEdit("0.0")
         self.goto_y.setFixedWidth(55)
-        self.goto_y.setToolTip("Target Y coordinate in mm.")
         goto_layout.addWidget(self.goto_y)
         goto_layout.addWidget(QLabel("Z:"))
         self.goto_z = QLineEdit("0.0")
         self.goto_z.setFixedWidth(55)
-        self.goto_z.setToolTip("Target Z coordinate in mm.")
         goto_layout.addWidget(self.goto_z)
         self.goto_btn = QPushButton("Go")
-        self.goto_btn.setToolTip(
-            "Move the stage to the entered XYZ coordinates.\n"
-            "Uses absolute positioning (G90 + G0 X… Y… Z…)."
-        )
+        self.goto_btn.setToolTip("Move the stage to the entered XYZ coordinates.")
         self.goto_btn.setFixedWidth(40)
         self.goto_btn.clicked.connect(self._goto_position)
         goto_layout.addWidget(self.goto_btn)
         layout.addWidget(goto_grp, 5, 0, 1, 5)
 
-        # ---- Wire jog buttons ----
+        # Wire jog buttons
         self.y_plus_btn.clicked.connect(lambda: self._move("y", 1))
         self.y_minus_btn.clicked.connect(lambda: self._move("y", -1))
         self.x_plus_btn.clicked.connect(lambda: self._move("x", 1))
@@ -474,7 +476,6 @@ class CalibrationPanel(QWidget):
             self.corners[name] = {"label": pos_label, "button": set_btn, "position": None}
             set_btn.clicked.connect(lambda checked=False, n=name: self._set_corner(n))
 
-        # Well quantity inputs
         qty_row = QHBoxLayout()
         qty_row.addWidget(QLabel("Columns (X):"))
         self.cols_spin = QSpinBox()
@@ -491,33 +492,6 @@ class CalibrationPanel(QWidget):
         layout.addLayout(qty_row, 4, 0, 1, 4)
 
         return grp
-
-    def _build_well_map_group(self) -> QWidget:
-        """Build the compact well-plate map widget."""
-        self.well_map = WellMapWidget()
-        self.well_map.well_clicked.connect(self._goto_xyz)
-
-        # Generate / Clear buttons
-        btn_row = QHBoxLayout()
-        gen_btn = QPushButton("Generate Well Map")
-        gen_btn.setToolTip(
-            "Compute all well positions from the four corners and display\n"
-            "the clickable well map below. Requires all four corners to be set."
-        )
-        gen_btn.clicked.connect(self._generate_well_map)
-        btn_row.addWidget(gen_btn)
-
-        clear_btn = QPushButton("Clear Map")
-        clear_btn.setToolTip("Remove the well map.")
-        clear_btn.clicked.connect(self.well_map.clear)
-        btn_row.addWidget(clear_btn)
-
-        container = QWidget()
-        vbox = QVBoxLayout(container)
-        vbox.setContentsMargins(0, 0, 0, 0)
-        vbox.addLayout(btn_row)
-        vbox.addWidget(self.well_map)
-        return container
 
     def _build_save_load_group(self) -> QGroupBox:
         grp = QGroupBox("Calibration File")
@@ -539,8 +513,8 @@ class CalibrationPanel(QWidget):
         layout.addWidget(load_btn)
 
         self._cal_status_label = QLabel("")
-        self._cal_status_label.setStyleSheet("font-size: 10px; color: gray;")
-        layout.addWidget(self._cal_status_label, stretch=1)
+        self._cal_status_label.setStyleSheet("font-size: 10px; color: green;")
+        layout.addWidget(self._cal_status_label)
 
         return grp
 
@@ -564,7 +538,6 @@ class CalibrationPanel(QWidget):
             logger.warning(f"[Calibration] Home error: {e}")
 
     def _goto_position(self):
-        """Move to the XYZ coordinates entered in the Go-To fields."""
         try:
             x = float(self.goto_x.text())
             y = float(self.goto_y.text())
@@ -575,10 +548,8 @@ class CalibrationPanel(QWidget):
                                 "Please enter valid numeric values for X, Y, and Z.")
 
     def _goto_xyz(self, x: float, y: float, z: float):
-        """Move the stage to an absolute XYZ position."""
         try:
             self.hw_manager.get_motion_controller().move_absolute(x=x, y=y, z=z)
-            # Pre-fill the Go-To fields with the destination so the user can see where they went
             self.goto_x.setText(f"{x:.3f}")
             self.goto_y.setText(f"{y:.3f}")
             self.goto_z.setText(f"{z:.3f}")
@@ -604,11 +575,9 @@ class CalibrationPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _compute_well_positions(self) -> Optional[list]:
-        """Return a flat list of (x, y, z) for every well, or None if corners incomplete."""
         corners = [self.corners[n]["position"] for n in CORNER_NAMES]
         if any(c is None for c in corners):
             return None
-
         cols = self.cols_spin.value()
         rows = self.rows_spin.value()
         ul, ll, ur, lr = corners
@@ -654,15 +623,11 @@ class CalibrationPanel(QWidget):
     def _save_calibration(self):
         corners = {n: self.corners[n]["position"] for n in CORNER_NAMES}
         if any(v is None for v in corners.values()):
-            QMessageBox.warning(
-                self, "Incomplete Calibration",
-                "Please set all four corner positions before saving."
-            )
+            QMessageBox.warning(self, "Incomplete Calibration",
+                                "Please set all four corner positions before saving.")
             return
-
         cal_dir = _default_cal_dir()
         cal_dir.mkdir(parents=True, exist_ok=True)
-
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Calibration",
             str(cal_dir / "calibration.json"),
@@ -670,7 +635,6 @@ class CalibrationPanel(QWidget):
         )
         if not path:
             return
-
         data = {
             "corners": corners,
             "cols": self.cols_spin.value(),
@@ -688,7 +652,6 @@ class CalibrationPanel(QWidget):
     def _load_calibration(self):
         cal_dir = _default_cal_dir()
         cal_dir.mkdir(parents=True, exist_ok=True)
-
         path, _ = QFileDialog.getOpenFileName(
             self, "Load Calibration",
             str(cal_dir),
@@ -696,7 +659,6 @@ class CalibrationPanel(QWidget):
         )
         if not path:
             return
-
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -723,8 +685,6 @@ class CalibrationPanel(QWidget):
         self._cal_status_label.setText(f"Loaded: {Path(path).name}")
         self._cal_status_label.setStyleSheet("font-size: 10px; color: green;")
         logger.info(f"[Calibration] Loaded from {path}")
-
-        # Auto-generate the well map after loading
         self._generate_well_map()
 
     # ------------------------------------------------------------------
@@ -735,11 +695,10 @@ class CalibrationPanel(QWidget):
         return {k: v["position"] for k, v in self.corners.items()}
 
     def get_well_dimensions(self) -> tuple[int, int]:
-        """Return (cols, rows) from the calibration spinners."""
+        """Return (cols, rows)."""
         return self.cols_spin.value(), self.rows_spin.value()
 
     def get_well_positions(self) -> Optional[list]:
-        """Return computed well positions, or None if corners are not all set."""
         return self._compute_well_positions()
 
     # ------------------------------------------------------------------
@@ -771,26 +730,16 @@ class CalibrationPanel(QWidget):
             "rows": self.rows_spin.value(),
         })
 
-    # ------------------------------------------------------------------
-    # Session restore
-    # ------------------------------------------------------------------
-
     def _load_from_session(self):
         s = self._session.get_session("calibration")
-
-        # Step size
         step = s.get("step_size", "1.0")
         self.step_size_input.setText(step)
         for btn in self._step_btn_group.buttons():
             if btn.text() == step:
                 btn.setChecked(True)
                 break
-
-        # Well dimensions
         self.cols_spin.setValue(int(s.get("cols", 12)))
         self.rows_spin.setValue(int(s.get("rows", 8)))
-
-        # Corners
         saved_corners = s.get("corners", {})
         for name, pos in saved_corners.items():
             if pos is not None and name in self.corners:
