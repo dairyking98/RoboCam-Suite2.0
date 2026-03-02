@@ -1,20 +1,16 @@
 """
 Allow the package to be run directly:
     python -m robocam_suite
+    python -m robocam_suite --simulate
 """
+# Delegate entirely to main.py so argument handling lives in one place.
 import sys
-from PySide6.QtWidgets import QApplication
-from robocam_suite.ui.main_window import MainWindow
-from robocam_suite.logger import setup_logger
+import os
 
+# Ensure the repo root is on the path when invoked as a module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-def main():
-    setup_logger()
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
-
+from main import main  # noqa: E402
 
 if __name__ == "__main__":
     main()

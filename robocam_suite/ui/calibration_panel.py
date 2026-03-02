@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt, QTimer
 
 from robocam_suite.hw_manager import hw_manager
 from robocam_suite.session_manager import session_manager
+from robocam_suite.ui.quick_capture_widget import QuickCaptureWidget
 
 # Preset step sizes shown as radio buttons (mm)
 STEP_PRESETS = ["0.1", "0.5", "1.0", "5.0", "10.0"]
@@ -29,6 +30,7 @@ class CalibrationPanel(QWidget):
         root.setSpacing(8)
         root.addWidget(self._build_movement_group())
         root.addWidget(self._build_calibration_group())
+        root.addWidget(QuickCaptureWidget("Quick Capture"))
         root.addStretch()
 
         # Restore persisted step size and corners

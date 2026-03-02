@@ -82,6 +82,18 @@ class GCodeSerialMotionController(MotionController):
             return self._serial_port is not None
         return self._serial_port is not None and self._serial_port.is_open
 
+    def send_raw(self, command: str) -> str:
+        """
+        Send a raw G-code command and return the full response string.
+
+        Examples::
+
+            mc.send_raw("M18")   # Disable all stepper motors
+            mc.send_raw("M503")  # Report EEPROM settings
+            mc.send_raw("M119")  # Report endstop states
+        """
+        return self._send_gcode(command.strip(), read_response=True)
+
     def _find_serial_port(self) -> Optional[str]:
         ports = serial.tools.list_ports.comports()
         for port in ports:

@@ -9,18 +9,28 @@ This is a complete overhaul of the original RoboCam-Suite, redesigned from the g
 - **Modular Architecture:** Core interfaces for cameras, motion controllers, and GPIO are separated from their concrete implementations.
 - **Cross-Platform:** Designed to run on Windows, macOS, and Linux.
 - **Virtual Environment Support:** Includes setup scripts for Windows, macOS, and Linux to automatically create a self-contained virtual environment.
-- **Simulation Mode:** All hardware components can be run in a simulation mode, allowing for development and testing without physical hardware.
+- **Simulation Mode:** Run the entire suite without any physical hardware. `python main.py --simulate`
 - **PySide6 GUI:** A modern and responsive graphical user interface built with PySide6.
-- **Well-Plate Calibration:** A dedicated calibration panel allows for easy and accurate calibration of well-plate positions.
-- **Experiment Automation:** A flexible experiment engine allows for the creation and execution of automated imaging sequences.
+- **Live Hardware Setup:** A dedicated Setup tab for live configuration of cameras, serial ports, and GPIO, with connection status indicators.
+- **Session Persistence:** The UI state is automatically saved and restored on restart.
+- **Named Presets:** Save and recall different experiment parameter sets for different setups.
 
 ## Getting Started
 
-This project uses a Python virtual environment to manage its dependencies. Follow the steps for your operating system to get set up.
+### 1. Install Drivers (if applicable)
 
-### 1. First-Time Setup
+Before using the software, ensure you have the necessary drivers installed for your hardware.
 
-Run the setup script for your platform. This will create a virtual environment in a `.venv` folder and install all required dependencies.
+| Hardware | Platform | Driver Link |
+|---|---|---|
+| **Player One Camera** | Windows | [Player One Website](https://player-one-astronomy.com/service/software/) |
+| **CH340 Serial Chip** | Windows, macOS | [SparkFun](https://learn.sparkfun.com/tutorials/how-to-install-ch340-drivers/all) |
+
+*Many 3-D printers and Arduino clones use the **CH340** chip for USB-to-serial communication. If your device doesn't appear as a serial port, you likely need this driver.*
+
+### 2. First-Time Software Setup
+
+This project uses a Python virtual environment to manage its dependencies. Run the setup script for your platform **once** to create a `.venv` folder and install all requirements.
 
 - **Windows:**
   Open Command Prompt and run:
@@ -34,9 +44,9 @@ Run the setup script for your platform. This will create a virtual environment i
   bash setup.sh
   ```
 
-### 2. Activate the Environment
+### 3. Activate the Environment
 
-Before running the application, you must **activate** the virtual environment in your terminal session.
+**Before every run**, you must **activate** the virtual environment in your terminal session.
 
 - **Windows:**
   ```cmd
@@ -49,25 +59,25 @@ Before running the application, you must **activate** the virtual environment in
   ```
   Your terminal prompt should now be prefixed with `(.venv)`.
 
-### 3. Configure Your Hardware
-
-Modify `robocam_suite/config/default_config.json` to match your hardware setup. You can select the appropriate drivers and specify connection parameters (e.g., serial ports, baud rates, camera indices).
-
-See the comments inside the config file for guidance on common settings.
-
 ### 4. Run the Application
 
-With the virtual environment activated, launch the application:
+With the virtual environment activated, launch the application.
 
+**Normal Mode (with hardware):**
 ```bash
 python main.py
 ```
 
-Alternatively, you can run it as an installed package:
-
+**Simulation Mode (no hardware needed):**
 ```bash
-python -m robocam_suite
+python main.py --simulate
 ```
+
+*In simulation mode, all hardware is emulated in software. This is useful for testing the UI or developing new features on a computer without any peripherals connected.*
+
+### 5. Configure Your Hardware
+
+Once the application is running, use the **Setup** tab to configure your hardware. Select your camera driver, serial ports, and baud rates. The settings are saved automatically and will be restored on the next launch.
 
 ## Developer Guide
 

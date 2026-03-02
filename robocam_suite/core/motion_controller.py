@@ -34,6 +34,17 @@ class MotionController(ABC):
         """Get the current (X, Y, Z) position."""
         pass
 
+    def send_raw(self, command: str) -> str:
+        """
+        Send a raw G-code command string and return the response.
+
+        Provides an escape hatch for commands not covered by the
+        higher-level interface (e.g. M18 to disable steppers, M503
+        to read EEPROM settings).  The default implementation is a
+        no-op so subclasses are not forced to override it.
+        """
+        return ""
+
     @property
     @abstractmethod
     def is_connected(self) -> bool:

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from robocam_suite.hw_manager import hw_manager
+from robocam_suite.ui.quick_capture_widget import QuickCaptureWidget
 
 
 class ManualControlPanel(QWidget):
@@ -22,6 +23,7 @@ class ManualControlPanel(QWidget):
         root.addWidget(self._build_general_group())
         root.addWidget(self._build_laser_group())
         root.addWidget(self._build_status_group())
+        root.addWidget(QuickCaptureWidget("Quick Capture"))
         root.addStretch()
 
         # Status refresh every second
@@ -117,8 +119,8 @@ class ManualControlPanel(QWidget):
     def _disable_steppers(self):
         try:
             mc = self.hw_manager.get_motion_controller()
-            # M84 is the standard G-code command to disable stepper motors
-            mc.send_raw("M84")
+            # M18 disables all stepper motors (equivalent to M84 on most firmware)
+            mc.send_raw("M18")
         except Exception as e:
             print(f"[ManualControl] Disable steppers error: {e}")
 
