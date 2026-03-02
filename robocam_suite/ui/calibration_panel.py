@@ -405,19 +405,37 @@ class CalibrationPanel(QWidget):
             "The suite uses bilinear interpolation to calculate every well position."
         )
         layout = QGridLayout(grp)
+        layout.setSpacing(4)
+
+        # Spatial arrangement:
+        #   grid row 0 → Upper row  (Upper-Left col 0, Upper-Right col 1)
+        #   grid row 1 → Lower row  (Lower-Left col 0, Lower-Right col 1)
+        # Each corner occupies two layout rows: label+coords on top, button below.
+        CORNER_POSITIONS = {
+            "Upper-Left":  (0, 0),
+            "Upper-Right": (0, 1),
+            "Lower-Left":  (1, 0),
+            "Lower-Right": (1, 1),
+        }
 
         self.corners: dict = {}
-        for i, name in enumerate(CORNER_NAMES):
-            row, col = divmod(i, 2)
-            layout.addWidget(QLabel(f"{name}:"), row * 2, col * 2)
+        for name, (plate_row, plate_col) in CORNER_POSITIONS.items():
+            grid_row = plate_row * 2   # label row
+            grid_col = plate_col * 2   # label col (each corner is 2 cols wide)
+
+            header = QHBoxLayout()
+            header.addWidget(QLabel(f"{name}:"))
             pos_label = QLabel("Not Set")
             pos_label.setStyleSheet("color: gray;")
-            layout.addWidget(pos_label, row * 2, col * 2 + 1)
+            header.addWidget(pos_label)
+            header.addStretch()
+            layout.addLayout(header, grid_row, grid_col, 1, 2)
+
             set_btn = QPushButton(f"Set {name}")
             set_btn.setToolTip(
                 f"Record the current stage position as the {name} corner."
             )
-            layout.addWidget(set_btn, row * 2 + 1, col * 2, 1, 2)
+            layout.addWidget(set_btn, grid_row + 1, grid_col, 1, 2)
             self.corners[name] = {"label": pos_label, "button": set_btn, "position": None}
             set_btn.clicked.connect(lambda checked=False, n=name: self._set_corner(n))
 
