@@ -1,7 +1,8 @@
 import robocam_suite.drivers.motion.gcode_serial_motion as gcode_serial_motion
 import robocam_suite.drivers.gpio.arduino_serial_gpio as arduino_serial_gpio
 import robocam_suite.drivers.gpio.null_gpio as null_gpio
-import robocam_suite.drivers.camera.opencv_camera as opencv_camera
+from robocam_suite.drivers.camera import opencv_camera
+from robocam_suite.drivers.camera import playerone_camera
 from robocam_suite.config.config_manager import config_manager
 from robocam_suite.logger import setup_logger
 
@@ -52,6 +53,8 @@ class HardwareManager:
             driver = cam_config.get("driver")
             if driver == "opencv":
                 self._camera = opencv_camera.OpenCVCamera(config=cam_config, simulate=simulate)
+            elif driver == "playerone":
+                self._camera = playerone_camera.PlayerOneCamera(config=cam_config, simulate=simulate)
             else:
                 raise ValueError(f"Unknown camera driver: {driver!r}")
         return self._camera

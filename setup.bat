@@ -36,6 +36,15 @@ IF ERRORLEVEL 1 (
     echo          To install manually:  pip install cv2-enumerate-cameras wmi
 )
 
+echo =^> Installing Player One Camera SDK (pyPOACamera + PlayerOneCamera.dll)...
+echo    Downloads SDK from player-one-astronomy.com into vendor\playerone\
+echo    Safe to skip if you don't have a Player One camera.
+python scripts\install_playerone_sdk.py
+IF ERRORLEVEL 1 (
+    echo WARNING: Player One SDK install failed or was skipped.
+    echo          To install manually later:  python scripts\install_playerone_sdk.py
+)
+
 echo.
 echo ============================================================
 echo  Setup complete!

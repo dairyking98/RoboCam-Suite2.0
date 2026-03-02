@@ -42,6 +42,27 @@ ARDUINO_BAUDRATES = [9600, 115200, 57600, 38400, 19200]
 
 
 # ---------------------------------------------------------------------------
+# Player One SDK path bootstrap
+# ---------------------------------------------------------------------------
+
+def _ensure_poa_path() -> None:
+    """Add vendor/playerone/ to sys.path so pyPOACamera can be imported.
+
+    The directory is expected at ``<project_root>/vendor/playerone/``.
+    This function is idempotent — it only adds the path once.
+    """
+    import sys
+    from pathlib import Path
+    # This file lives at robocam_suite/ui/setup_panel.py
+    # Project root is therefore three levels up.
+    project_root = Path(__file__).resolve().parent.parent.parent
+    vendor_dir = project_root / "vendor" / "playerone"
+    if vendor_dir.is_dir() and str(vendor_dir) not in sys.path:
+        sys.path.insert(0, str(vendor_dir))
+        logger.debug(f"[PlayerOne] SDK path added: {vendor_dir}")
+
+
+# ---------------------------------------------------------------------------
 # Camera device enumeration (runs in a background thread to avoid blocking)
 # ---------------------------------------------------------------------------
 
@@ -187,16 +208,20 @@ class _CameraEnumerator(QThread):
         except Exception as e:
             logger.debug(f"[CameraEnum] OpenCV probe failed: {e}")
 
-        # --- Player One Astronomy cameras ---
+        # --- Player One Astronomy cameras (via pyPOACamera SDK) ---
+        # The SDK ships as vendor/playerone/pyPOACamera.py + PlayerOneCamera.dll.
+        # _ensure_poa_path() adds that directory to sys.path so the import works.
         try:
-            import PlayerOneCamera as poc  # type: ignore
-            count = poc.POACameraCount()
+            _ensure_poa_path()
+            import pyPOACamera as poa  # type: ignore
+            count = poa.GetCameraCount()
             for i in range(count):
-                info = poc.POAGetCameraProperties(i)
-                label = f"PlayerOne — {info.cameraModelName.decode()} (index {i})"
+                props = poa.GetCameraProperties(i)
+                model = props.cameraModelName.decode(errors="replace").strip()
+                label = f"PlayerOne — {model} (index {i})"
                 devices.append((label, "playerone", i))
         except ImportError:
-            pass
+            pass  # SDK not installed — silently skip
         except Exception as e:
             logger.debug(f"[CameraEnum] PlayerOne probe failed: {e}")
 
