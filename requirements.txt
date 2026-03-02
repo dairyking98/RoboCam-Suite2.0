@@ -2,3 +2,8 @@ pyserial
 numpy
 opencv-python
 PySide6
+
+# Optional: Windows camera device name enumeration (install any one of these)
+# cv2-enumerate-cameras   # best option — maps index directly to device name
+# pygrabber               # DirectShow-based, Windows only
+# wmi                     # WMI-based fallback, Windows only

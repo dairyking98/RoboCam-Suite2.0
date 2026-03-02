@@ -8,6 +8,12 @@ The camera section lists every camera device detected on the system:
   - Player One Astronomy cameras via the official SDK (if installed)
   - Raspberry Pi camera via picamera2 (if running on a Pi)
 
+On Windows, real device names are resolved via (in priority order):
+  1. cv2-enumerate-cameras  (pip install cv2-enumerate-cameras)
+  2. pygrabber               (pip install pygrabber)
+  3. WMI                     (pip install wmi)
+If none are installed, cameras fall back to "USB Camera (index N)" labels.
+
 No camera preview is shown here; use the Calibration or Experiment tabs.
 """
 from __future__ import annotations
@@ -46,8 +52,57 @@ class _CameraEnumerator(QThread):
     """
     cameras_found = Signal(list)   # list of (label, driver, device_id)
 
+    @staticmethod
+    def _get_windows_camera_names() -> dict:
+        """
+        Return a dict mapping OpenCV index -> human-readable device name on Windows.
+        Tries cv2-enumerate-cameras first, then pygrabber, then WMI.
+        Returns empty dict on failure so the caller can fall back gracefully.
+        """
+        # Method 1: cv2-enumerate-cameras (best — maps index directly)
+        try:
+            from cv2_enumerate_cameras import enumerate_cameras  # type: ignore
+            return {info.index: info.name for info in enumerate_cameras()}
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"[CameraEnum] cv2-enumerate-cameras failed: {e}")
+
+        # Method 2: pygrabber (Windows DirectShow)
+        try:
+            from pygrabber.dshow_graph import FilterGraph  # type: ignore
+            graph = FilterGraph()
+            names = graph.get_input_devices()
+            return {i: name for i, name in enumerate(names)}
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"[CameraEnum] pygrabber failed: {e}")
+
+        # Method 3: WMI (always present on Windows, no extra install)
+        try:
+            import wmi  # type: ignore
+            c = wmi.WMI()
+            names = {}
+            for i, cam in enumerate(c.Win32_PnPEntity(PNPClass="Camera")):
+                names[i] = cam.Name
+            if names:
+                return names
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"[CameraEnum] WMI failed: {e}")
+
+        return {}
+
     def run(self):
         devices = []
+        os_name = platform.system()
+
+        # Pre-fetch Windows device names once (avoids repeated COM calls)
+        win_names: dict = {}
+        if os_name == "Windows":
+            win_names = self._get_windows_camera_names()
 
         # --- OpenCV USB / built-in cameras ---
         try:
@@ -55,21 +110,17 @@ class _CameraEnumerator(QThread):
             for idx in range(10):
                 cap = cv2.VideoCapture(idx)
                 if cap is not None and cap.isOpened():
-                    # Try to get a human-readable name on Windows via DirectShow
-                    name = f"Camera {idx}"
-                    try:
-                        if platform.system() == "Windows":
-                            # cv2.CAP_PROP_BACKEND_NAME not always available; use index label
-                            name = f"USB/Webcam — index {idx}"
-                        elif platform.system() == "Linux":
-                            import os
-                            v4l = f"/dev/video{idx}"
-                            if os.path.exists(v4l):
-                                name = f"Video device {idx}  ({v4l})"
-                        elif platform.system() == "Darwin":
-                            name = f"Camera {idx}  (AVFoundation)"
-                    except Exception:
-                        pass
+                    if os_name == "Windows":
+                        raw = win_names.get(idx, "")
+                        name = f"{raw} (index {idx})" if raw else f"USB Camera (index {idx})"
+                    elif os_name == "Linux":
+                        import os
+                        v4l = f"/dev/video{idx}"
+                        name = f"Video device {idx} ({v4l})" if os.path.exists(v4l) else f"Camera {idx}"
+                    elif os_name == "Darwin":
+                        name = f"Camera {idx} (AVFoundation)"
+                    else:
+                        name = f"Camera {idx}"
                     devices.append((name, "opencv", idx))
                     cap.release()
         except Exception as e:
