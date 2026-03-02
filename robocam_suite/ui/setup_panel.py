@@ -163,10 +163,13 @@ class _CameraEnumerator(QThread):
             win_names = self._get_windows_camera_names()
 
         # --- OpenCV USB / built-in cameras ---
+        # On Windows we use the MSMF backend explicitly to avoid the OrbbecSDK
+        # (obsensor) backend probing every index and printing noisy errors.
         try:
             import cv2
+            _backend = cv2.CAP_MSMF if os_name == "Windows" else cv2.CAP_ANY
             for idx in range(10):
-                cap = cv2.VideoCapture(idx)
+                cap = cv2.VideoCapture(idx, _backend)
                 if cap is not None and cap.isOpened():
                     if os_name == "Windows":
                         raw = win_names.get(idx, "")
@@ -198,29 +201,52 @@ class _CameraEnumerator(QThread):
             logger.debug(f"[CameraEnum] PlayerOne probe failed: {e}")
 
         # --- Windows Imaging Devices (WIA class: microscopes, scientific cameras) ---
-        # These are listed as informational entries; they may require a vendor SDK
-        # (e.g. Player One SDK, ASCOM) rather than a plain OpenCV index.
-        # We add them only when they are NOT already covered by the OpenCV probe
-        # above (i.e. the device does not open via cv2.VideoCapture).
+        # WMI lists devices like the POA MARS 662M under PNPClass="Image" even
+        # though they are fully accessible via cv2.VideoCapture.  We therefore
+        # cross-reference each WIA device against the OpenCV-probed list:
+        #
+        #   * If the device name matches an already-found OpenCV entry, skip it
+        #     (it is already listed with the correct driver=opencv and index).
+        #   * If the device name appears in win_names (resolved by
+        #     cv2-enumerate-cameras / pygrabber) but was NOT opened by the
+        #     VideoCapture loop (e.g. the camera was at an index > 9, or it
+        #     failed to open but is still enumerable), add it as driver=opencv
+        #     with the index from win_names so the hardware manager can connect it.
+        #   * Otherwise add it as driver=imaging_device with the PnP device ID
+        #     and a note that a vendor SDK may be required.
         if os_name == "Windows":
             imaging_devs = self._get_windows_imaging_devices()
-            # Build a lower-case set of base names already found via OpenCV to
-            # avoid duplicates.  Use the portion before " (index N)" as the key.
+
+            # Build lookup structures from the OpenCV probe results.
             opencv_names_lower = {
                 d[0].split(" (index ")[0].strip().lower()
                 for d in devices if d[1] == "opencv"
             }
+            # Reverse map: lower-case name -> OpenCV index (from win_names)
+            win_names_lower_to_idx = {
+                v.strip().lower(): k for k, v in win_names.items()
+            }
+
             for dev_name, dev_id in imaging_devs:
-                # Skip if this device is already represented in the OpenCV list.
-                # Use substring matching so minor name variations don't cause
-                # duplicates (e.g. "Iriun Webcam" vs "Iriun Webcam (index 0)").
-                dev_lower = dev_name.lower()
+                dev_lower = dev_name.strip().lower()
+
+                # Already listed via OpenCV probe — skip.
                 already_listed = any(
                     dev_lower in ocv or ocv in dev_lower
                     for ocv in opencv_names_lower
                 )
-                if not already_listed:
-                    label = f"{dev_name}  [Imaging Device — may need vendor SDK]"
+                if already_listed:
+                    continue
+
+                # Known to cv2-enumerate-cameras/win_names but not yet opened —
+                # promote to driver=opencv so the hardware manager can open it.
+                if dev_lower in win_names_lower_to_idx:
+                    opencv_idx = win_names_lower_to_idx[dev_lower]
+                    label = f"{dev_name.strip()} (index {opencv_idx})"
+                    devices.append((label, "opencv", opencv_idx))
+                else:
+                    # Truly WIA-only (scanner, ASCOM device, etc.)
+                    label = f"{dev_name.strip()}  [Imaging Device \u2014 may need vendor SDK]"
                     devices.append((label, "imaging_device", dev_id))
 
         # --- Raspberry Pi camera via picamera2 ---
@@ -559,28 +585,87 @@ class SetupPanel(QWidget):
         if sel_idx < 0 or sel_idx >= len(self._camera_devices):
             return
         label, driver, device_id = self._camera_devices[sel_idx]
+
+        # imaging_device entries that survived deduplication are truly WIA-only
+        # (e.g. scanners) and cannot be opened by OpenCV.  Show a warning and
+        # do nothing so the hardware manager is not left in a broken state.
+        if driver == "imaging_device":
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Vendor SDK Required",
+                f"“{label}” is a WIA Imaging Device that cannot be opened "
+                f"directly by OpenCV.\n\n"
+                f"To use this device you need the manufacturer’s SDK "
+                f"(e.g. Player One SDK, EPSON Scan SDK, or an ASCOM driver).\n\n"
+                f"If this is a Player One camera, install the Player One SDK "
+                f"and the PlayerOneCamera Python package, then re-scan.",
+            )
+            return
+
+        # Disconnect the existing camera instance so the next get_camera() call
+        # creates a fresh one with the updated config.
+        if self._hw._camera is not None:
+            try:
+                self._hw._camera.disconnect()
+            except Exception:
+                pass
+            self._hw._camera = None
+
         self._cfg.update_section("camera", {"driver": driver, "camera_index": device_id})
         self._session.update_session("setup", {
             "camera_driver": driver,
             "camera_index": device_id,
             "camera_label": label,
         })
-        self._hw._camera = None
         logger.info(f"Camera config updated: driver={driver}, device_id={device_id} ({label})")
+
+        # Reconnect with the new settings.
+        try:
+            self._hw.get_camera().connect()
+            logger.info("[Setup] Camera reconnected successfully.")
+        except Exception as e:
+            logger.error(f"[Setup] Camera reconnect failed: {e}")
+        self._refresh_status()
 
     def _apply_printer(self):
         port = self.printer_port_combo.currentText() or "auto"
         baud = int(self.printer_baud_combo.currentData() or 115200)
+
+        # Disconnect existing instance before replacing it.
+        if self._hw._motion_controller is not None:
+            try:
+                self._hw._motion_controller.disconnect()
+            except Exception:
+                pass
+            self._hw._motion_controller = None
+
         self._cfg.update_section("motion_controller", {"port": port, "baudrate": baud})
         self._session.update_session("setup", {"motion_port": port, "motion_baudrate": baud})
-        self._hw._motion_controller = None
         logger.info(f"Printer config updated: port={port}, baudrate={baud}")
+
+        # Reconnect with the new settings.
+        try:
+            self._hw.get_motion_controller().connect()
+            logger.info("[Setup] Printer reconnected successfully.")
+        except Exception as e:
+            logger.error(f"[Setup] Printer reconnect failed: {e}")
+        self._refresh_status()
 
     def _apply_gpio(self):
         enabled = self.gpio_enabled_chk.isChecked()
         port = self.gpio_port_combo.currentText() or "auto"
         baud = int(self.gpio_baud_combo.currentData() or 9600)
         laser_pin = self.gpio_laser_pin_spin.value()
+
+        # Disconnect existing instance before replacing it.
+        if self._hw._gpio_controller is not None:
+            try:
+                self._hw._gpio_controller.disconnect()
+            except Exception:
+                pass
+            self._hw._gpio_controller = None
+
         self._cfg.update_section("gpio_controller", {
             "enabled": enabled, "port": port,
             "baudrate": baud, "laser_pin": laser_pin,
@@ -589,8 +674,15 @@ class SetupPanel(QWidget):
             "gpio_enabled": enabled, "gpio_port": port,
             "gpio_baudrate": baud, "gpio_laser_pin": laser_pin,
         })
-        self._hw._gpio_controller = None
         logger.info(f"GPIO config updated: enabled={enabled}, port={port}, baud={baud}, pin={laser_pin}")
+
+        # Reconnect with the new settings.
+        try:
+            self._hw.get_gpio_controller().connect()
+            logger.info("[Setup] GPIO reconnected successfully.")
+        except Exception as e:
+            logger.error(f"[Setup] GPIO reconnect failed: {e}")
+        self._refresh_status()
 
     def _connect_all(self):
         try:

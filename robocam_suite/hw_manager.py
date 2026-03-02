@@ -96,19 +96,41 @@ class HardwareManager:
     # ------------------------------------------------------------------
 
     def connect_all(self):
-        """Connect all configured hardware devices."""
+        """Connect all configured hardware devices.
+
+        Each device is connected independently.  A failure on one device is
+        logged but does **not** disconnect the others that already succeeded.
+        Raises the last exception encountered (if any) so callers can detect
+        that at least one device failed to connect.
+        """
+        errors = []
+
+        logger.info("Connecting to motion controller...")
         try:
-            logger.info("Connecting to motion controller...")
             self.get_motion_controller().connect()
-            logger.info("Connecting to camera...")
-            self.get_camera().connect()
-            logger.info("Connecting to GPIO controller...")
-            self.get_gpio_controller().connect()
-            logger.info("All hardware connected.")
         except Exception as e:
-            logger.error(f"Failed to connect hardware: {e}")
-            self.disconnect_all()
-            raise
+            logger.error(f"[HW] Motion controller connect failed: {e}")
+            errors.append(e)
+
+        logger.info("Connecting to camera...")
+        try:
+            self.get_camera().connect()
+        except Exception as e:
+            logger.error(f"[HW] Camera connect failed: {e}")
+            errors.append(e)
+
+        logger.info("Connecting to GPIO controller...")
+        try:
+            self.get_gpio_controller().connect()
+        except Exception as e:
+            logger.error(f"[HW] GPIO controller connect failed: {e}")
+            errors.append(e)
+
+        if errors:
+            logger.warning(f"[HW] {len(errors)} device(s) failed to connect (see errors above).")
+            raise errors[-1]   # re-raise last error so callers know something failed
+        else:
+            logger.info("All hardware connected.")
 
     def disconnect_all(self):
         """Disconnect all hardware devices that were previously connected."""
