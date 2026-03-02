@@ -88,7 +88,7 @@ class PlayerOneCamera(Camera):
             Initial exposure time in microseconds.
         ``gain`` (int, default 100)
             Initial gain value.
-        ``resolution`` (list[int, int], default [1920, 1080])
+        ``resolution`` (list[int, int], default [1936, 1100])
             Desired capture resolution [width, height].  The SDK will use the
             nearest supported size.
         ``fps`` (float, default 30.0)
@@ -157,7 +157,7 @@ class PlayerOneCamera(Camera):
     def connect(self) -> None:
         if self._simulate:
             self._opened = True
-            self._width, self._height = self._config.get("resolution", [1920, 1080])
+            self._width, self._height = self._config.get("resolution", [1936, 1100])
             logger.info("[PlayerOne] Simulated connect OK")
             return
 

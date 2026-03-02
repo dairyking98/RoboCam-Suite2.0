@@ -53,6 +53,7 @@ def _default_cal_dir() -> Path:
 
 class _FrameGrabber(QThread):
     frame_ready = Signal(QImage)
+    camera_disconnected = Signal()   # emitted once when camera transitions to disconnected
 
     def __init__(self, fps: int = 15):
         super().__init__()
@@ -66,9 +67,11 @@ class _FrameGrabber(QThread):
         self._running = True
         interval_ms = max(1, int(1000 / self._fps))
         camera = hw_manager.get_camera()
+        _was_connected = False
         while self._running:
             try:
                 if camera.is_connected:
+                    _was_connected = True
                     frame = camera.read_frame()
                     if frame is not None:
                         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -78,6 +81,10 @@ class _FrameGrabber(QThread):
                             QImage.Format.Format_RGB888
                         )
                         self.frame_ready.emit(qimg.copy())
+                else:
+                    if _was_connected:
+                        self.camera_disconnected.emit()
+                        _was_connected = False
             except Exception:
                 pass
             self.msleep(interval_ms)
@@ -92,9 +99,10 @@ class _LivePreview(QWidget):
         super().__init__(parent)
         self.setMinimumSize(320, 240)
         self._pixmap: Optional[QPixmap] = None
-        lbl = QLabel("Camera not connected", self)
+        lbl = QLabel("No camera connected\n\nSelect a camera in Setup and click\nApply & Reconnect Camera", self)
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet("color: gray; font-size: 13px;")
+        lbl.setStyleSheet("color: #a0a0a0; font-size: 12px;")
+        lbl.setWordWrap(True)
         self._no_cam_lbl = lbl
         layout = QVBoxLayout(self)
         layout.addWidget(lbl)
@@ -102,6 +110,12 @@ class _LivePreview(QWidget):
     def update_frame(self, qimg: QImage):
         self._pixmap = QPixmap.fromImage(qimg)
         self._no_cam_lbl.hide()
+        self.update()
+
+    def show_disconnected(self):
+        """Re-show the 'no camera' label and clear the last frame."""
+        self._pixmap = None
+        self._no_cam_lbl.show()
         self.update()
 
     def paintEvent(self, event):
@@ -275,6 +289,7 @@ class CalibrationPanel(QWidget):
         # Camera frame grabber
         self._grabber = _FrameGrabber(fps=15)
         self._grabber.frame_ready.connect(self._live_preview.update_frame)
+        self._grabber.camera_disconnected.connect(self._live_preview.show_disconnected)
         self._grabber.start()
 
     def closeEvent(self, event):

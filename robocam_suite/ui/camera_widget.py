@@ -22,6 +22,11 @@ class CameraWidget(QWidget):
         # Dark background while no frame is available
         self.setStyleSheet("background-color: black;")
 
+    def clear_frame(self):
+        """Reset to the 'No camera connected' state."""
+        self._pixmap = None
+        self.update()
+
     def set_frame(self, frame: np.ndarray):
         """
         Accepts an OpenCV BGR frame, converts it to a QPixmap, and
@@ -46,9 +51,18 @@ class CameraWidget(QWidget):
         painter = QPainter(self)
 
         if self._pixmap is None:
-            painter.fillRect(self.rect(), QColor("black"))
-            painter.setPen(QColor("white"))
-            painter.drawText(self.rect(), Qt.AlignCenter, "No Camera Feed")
+            painter.fillRect(self.rect(), QColor(30, 30, 30))
+            # Draw a centred "No camera connected" message
+            from PySide6.QtGui import QFont
+            font = QFont()
+            font.setPointSize(12)
+            painter.setFont(font)
+            painter.setPen(QColor(160, 160, 160))
+            painter.drawText(
+                self.rect(),
+                Qt.AlignCenter,
+                "No camera connected\n\nSelect a camera in Setup and click\nApply & Reconnect Camera",
+            )
             return
 
         scaled = self._pixmap.scaled(
