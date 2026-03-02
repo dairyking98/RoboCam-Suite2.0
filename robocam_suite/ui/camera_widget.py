@@ -1,44 +1,59 @@
 import cv2
-from PySide6.QtWidgets import QOpenGLWidget
-from PySide6.QtGui import QImage, QPainter, QColor
-from PySide6.QtCore import Qt, QTimer
 import numpy as np
+from PySide6.QtWidgets import QWidget, QSizePolicy
+from PySide6.QtGui import QImage, QPainter, QColor, QPixmap
+from PySide6.QtCore import Qt
 
-class CameraWidget(QOpenGLWidget):
-    """A widget to display a camera feed."""
+
+class CameraWidget(QWidget):
+    """
+    A widget that displays a live camera feed.
+
+    Uses a plain QWidget with a custom paintEvent rather than
+    QOpenGLWidget, which keeps imports simple and portable across
+    all platforms and PySide6 versions.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._frame: np.ndarray = None
+        self._pixmap: QPixmap = None
+        # Allow the widget to grow and shrink freely
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # Dark background while no frame is available
+        self.setStyleSheet("background-color: black;")
 
     def set_frame(self, frame: np.ndarray):
-        """Sets the frame to be displayed."""
-        # Convert BGR (OpenCV default) to RGB
-        if frame is not None:
-            self._frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        else:
-            self._frame = None
-        self.update() # Trigger a repaint
+        """
+        Accepts an OpenCV BGR frame, converts it to a QPixmap, and
+        schedules a repaint.  Safe to call from the main thread only.
+        """
+        if frame is None:
+            self._pixmap = None
+            self.update()
+            return
 
-    def paintGL(self):
-        """Renders the camera frame to the widget."""
+        # OpenCV uses BGR; Qt expects RGB
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb.shape
+        bytes_per_line = ch * w
+        q_image = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        # Keep a copy so the underlying numpy buffer is not freed
+        self._pixmap = QPixmap.fromImage(q_image.copy())
+        self.update()
+
+    def paintEvent(self, event):
+        """Renders the latest frame, centred and aspect-ratio-correct."""
         painter = QPainter(self)
 
-        if self._frame is None:
-            painter.fillRect(self.rect(), QColor('black'))
-            painter.setPen(QColor('white'))
+        if self._pixmap is None:
+            painter.fillRect(self.rect(), QColor("black"))
+            painter.setPen(QColor("white"))
             painter.drawText(self.rect(), Qt.AlignCenter, "No Camera Feed")
             return
 
-        height, width, channel = self._frame.shape
-        bytes_per_line = 3 * width
-        q_image = QImage(self._frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
-
-        # Scale image to fit widget, preserving aspect ratio
-        scaled_image = q_image.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-
-        # Center the image
-        x = (self.width() - scaled_image.width()) / 2
-        y = (self.height() - scaled_image.height()) / 2
-
-        painter.drawImage(x, y, scaled_image)
+        scaled = self._pixmap.scaled(
+            self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        x = (self.width() - scaled.width()) // 2
+        y = (self.height() - scaled.height()) // 2
+        painter.drawPixmap(x, y, scaled)
