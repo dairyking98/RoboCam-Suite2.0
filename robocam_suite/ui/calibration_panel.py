@@ -173,13 +173,15 @@ class WellMapWidget(QGroupBox):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setMaximumHeight(180)
+        # No fixed height cap — expands to fill available space in the splitter
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         inner = QWidget()
         inner.setLayout(self._layout)
         scroll.setWidget(inner)
 
         outer = QVBoxLayout(self)
-        outer.addWidget(scroll)
+        outer.addWidget(scroll, stretch=1)
 
         self._placeholder = QLabel("Set all four corners to generate the map.")
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)

@@ -1,27 +1,34 @@
 """
 Experiment Panel — configure, select wells, and run well-plate imaging experiments.
 
-Well Selection behaviour
-------------------------
-- The grid is populated from the calibration panel's current rows/cols.
-- A "Sync from Calibration" button refreshes the grid if the calibration
-  has changed since the panel was opened.
-- Click            : toggle a single well.
-- Shift + Click    : select/deselect a rectangular range from the last
-                     clicked well to this one.
-- Ctrl  + Click    : toggle a single well without clearing the range anchor
-                     (additive individual toggle).
+Layout order (top to bottom)
+-----------------------------
+1. Well Selection  — loaded from calibration; Shift/Ctrl-click supported.
+2. Experiment Parameters — timing fields only (no rows/cols here).
+3. Presets — saved to Documents/RoboCam/experiment_presets/.
+4. Run controls.
+
+Well Selection click behaviour
+--------------------------------
+- Plain click      : toggle well + set range anchor.
+- Shift + click    : rectangular range select/deselect from anchor to here.
+- Ctrl  + click    : additive individual toggle (anchor unchanged).
+
+Note: modifier detection uses mousePressEvent on each button, NOT the
+clicked() signal, because Qt clears modifier state before clicked fires.
 """
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QGridLayout, QLabel, QLineEdit, QGroupBox, QSpinBox,
     QComboBox, QInputDialog, QMessageBox, QScrollArea,
-    QApplication,
 )
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QMouseEvent
 
 from robocam_suite.hw_manager import hw_manager
 from robocam_suite.experiments.experiment import Experiment
@@ -32,6 +39,10 @@ from robocam_suite.logger import setup_logger
 logger = setup_logger()
 
 CORNER_NAMES = ["Upper-Left", "Lower-Left", "Upper-Right", "Lower-Right"]
+
+
+def _default_preset_dir() -> Path:
+    return Path.home() / "Documents" / "RoboCam" / "experiment_presets"
 
 
 # ---------------------------------------------------------------------------
@@ -55,10 +66,13 @@ class ExperimentRunner(QThread):
 
 
 # ---------------------------------------------------------------------------
-# Well toggle button
+# Well toggle button — captures mouse modifiers in mousePressEvent
 # ---------------------------------------------------------------------------
 
 class _WellButton(QPushButton):
+    # Emits (row, col, Qt.KeyboardModifiers)
+    well_pressed = Signal(int, int, object)
+
     SELECTED_STYLE = (
         "background-color: #2a7ae2; color: white; border: 1px solid #1a5ab2; "
         "border-radius: 3px; font-size: 9px; padding: 1px;"
@@ -68,8 +82,10 @@ class _WellButton(QPushButton):
         "border-radius: 3px; font-size: 9px; padding: 1px;"
     )
 
-    def __init__(self, label: str, parent=None):
+    def __init__(self, label: str, row: int, col: int, parent=None):
         super().__init__(label, parent)
+        self._row = row
+        self._col = col
         self._selected = True
         self.setFixedSize(36, 24)
         self._apply_style()
@@ -83,11 +99,17 @@ class _WellButton(QPushButton):
     def is_selected(self) -> bool:
         return self._selected
 
-    def set_selected(self, value: bool, *, _emit: bool = True):
+    def set_selected(self, value: bool):
         if self._selected == value:
             return
         self._selected = value
         self._apply_style()
+
+    def mousePressEvent(self, event: QMouseEvent):
+        # Capture modifiers HERE — before Qt clears them in the base handler
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.well_pressed.emit(self._row, self._col, event.modifiers())
+        super().mousePressEvent(event)
 
 
 # ---------------------------------------------------------------------------
@@ -96,18 +118,14 @@ class _WellButton(QPushButton):
 
 class WellSelectionWidget(QGroupBox):
     """
-    Interactive grid of toggle buttons, one per well.
-
-    Keyboard modifiers (checked at click time via QApplication):
-    - Shift + Click  : rectangular range select/deselect from last anchor.
-    - Ctrl  + Click  : additive individual toggle (does not move anchor).
-    - Plain Click    : toggle single well and set as new anchor.
+    Interactive grid of toggle buttons driven by calibration dimensions.
+    Dimensions are set externally via rebuild(); the widget never owns rows/cols.
     """
 
     def __init__(self, parent=None):
         super().__init__("Well Selection", parent)
         self.setToolTip(
-            "Click a well to toggle it on/off.\n"
+            "Click a well to toggle it.\n"
             "Shift-click to select a rectangular range.\n"
             "Ctrl-click to toggle individual wells additively.\n"
             "Only selected (blue) wells will be visited during the experiment."
@@ -115,14 +133,14 @@ class WellSelectionWidget(QGroupBox):
         self._rows = 8
         self._cols = 12
         self._buttons: dict[tuple[int, int], _WellButton] = {}
-        self._anchor: tuple[int, int] | None = None   # last plain-click position
+        self._anchor: tuple[int, int] | None = None
 
         outer = QVBoxLayout(self)
         outer.setSpacing(4)
+        outer.setContentsMargins(4, 4, 4, 4)
 
         # Toolbar
         toolbar = QHBoxLayout()
-
         check_all_btn = QPushButton("Check All")
         check_all_btn.setToolTip("Select all wells.")
         check_all_btn.clicked.connect(self.check_all)
@@ -143,15 +161,17 @@ class WellSelectionWidget(QGroupBox):
         toolbar.addWidget(self._count_label, stretch=1)
         outer.addLayout(toolbar)
 
-        # Scrollable grid
+        # Scrollable grid — no fixed height cap; expands to fill available space
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setMaximumHeight(220)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._grid_widget = QWidget()
         self._grid_layout = QGridLayout(self._grid_widget)
         self._grid_layout.setSpacing(2)
+        self._grid_layout.setContentsMargins(2, 2, 2, 2)
         scroll.setWidget(self._grid_widget)
-        outer.addWidget(scroll)
+        outer.addWidget(scroll, stretch=1)
 
         self._rebuild_grid()
 
@@ -160,14 +180,14 @@ class WellSelectionWidget(QGroupBox):
     # ------------------------------------------------------------------
 
     def rebuild(self, rows: int, cols: int):
-        """Rebuild the grid for a new well-plate size, preserving selection where possible."""
-        old_selection: dict[tuple[int, int], bool] = {
+        """Rebuild the grid for a new plate size, preserving selection where possible."""
+        old: dict[tuple[int, int], bool] = {
             pos: btn.is_selected for pos, btn in self._buttons.items()
         }
         self._rows = rows
         self._cols = cols
         self._anchor = None
-        self._rebuild_grid(old_selection)
+        self._rebuild_grid(old)
 
     def check_all(self):
         for btn in self._buttons.values():
@@ -185,7 +205,6 @@ class WellSelectionWidget(QGroupBox):
         self._update_count()
 
     def get_selected_indices(self) -> list[int]:
-        """Return flat 0-based (row-major) indices of selected wells."""
         indices = []
         idx = 0
         for row in range(self._rows):
@@ -196,20 +215,20 @@ class WellSelectionWidget(QGroupBox):
         return indices
 
     def get_selected_labels(self) -> list[str]:
-        labels = []
-        for row in range(self._rows):
-            for col in range(self._cols):
-                btn = self._buttons[(row, col)]
-                if btn.is_selected:
-                    labels.append(btn.text())
-        return labels
+        return [
+            self._buttons[(r, c)].text()
+            for r in range(self._rows)
+            for c in range(self._cols)
+            if self._buttons[(r, c)].is_selected
+        ]
 
     # ------------------------------------------------------------------
-    # Internal grid construction
+    # Grid construction
     # ------------------------------------------------------------------
 
-    def _rebuild_grid(self, old_selection: dict | None = None):
+    def _rebuild_grid(self, old: dict | None = None):
         for btn in self._buttons.values():
+            btn.well_pressed.disconnect()
             btn.deleteLater()
         self._buttons.clear()
 
@@ -235,47 +254,40 @@ class WellSelectionWidget(QGroupBox):
 
             for col in range(self._cols):
                 label = f"{row_letter}{col + 1}"
-                btn = _WellButton(label)
-                if old_selection is not None:
-                    btn.set_selected(old_selection.get((row, col), True))
-                # Use a raw mousePressEvent override via lambda capture
-                btn.clicked.connect(
-                    lambda checked=False, r=row, c=col: self._on_well_clicked(r, c)
-                )
+                btn = _WellButton(label, row, col)
+                if old is not None:
+                    btn.set_selected(old.get((row, col), True))
+                # Connect via well_pressed — modifiers captured in mousePressEvent
+                btn.well_pressed.connect(self._on_well_pressed)
                 self._grid_layout.addWidget(btn, row + 1, col + 1)
                 self._buttons[(row, col)] = btn
 
         self._update_count()
 
     # ------------------------------------------------------------------
-    # Click handling
+    # Click handling — modifiers arrive reliably here
     # ------------------------------------------------------------------
 
-    def _on_well_clicked(self, row: int, col: int):
-        mods = QApplication.keyboardModifiers()
-        shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
-        ctrl  = bool(mods & Qt.KeyboardModifier.ControlModifier)
+    def _on_well_pressed(self, row: int, col: int, modifiers):
+        shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        ctrl  = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
         btn   = self._buttons[(row, col)]
 
         if shift and self._anchor is not None:
-            # ---- Shift-click: rectangular range ----
+            # Rectangular range: target state = opposite of anchor's current state
             r0, c0 = self._anchor
-            r1, c1 = row, col
-            # The target state is the OPPOSITE of the anchor well's current state
-            # so that shift-clicking into an unselected area selects, and vice-versa.
             target = not self._buttons[self._anchor].is_selected
-            for r in range(min(r0, r1), max(r0, r1) + 1):
-                for c in range(min(c0, c1), max(c0, c1) + 1):
+            for r in range(min(r0, row), max(r0, row) + 1):
+                for c in range(min(c0, col), max(c0, col) + 1):
                     self._buttons[(r, c)].set_selected(target)
-            # Do NOT move the anchor on shift-click
+            # Anchor stays at original position
 
         elif ctrl:
-            # ---- Ctrl-click: additive individual toggle ----
+            # Additive individual toggle — anchor unchanged
             btn.set_selected(not btn.is_selected)
-            # Do NOT move the anchor on ctrl-click
 
         else:
-            # ---- Plain click: toggle and set anchor ----
+            # Plain click — toggle and move anchor
             btn.set_selected(not btn.is_selected)
             self._anchor = (row, col)
 
@@ -288,7 +300,7 @@ class WellSelectionWidget(QGroupBox):
 
 
 # ---------------------------------------------------------------------------
-# Helper: labelled field with tooltip
+# Helper: labelled parameter field with tooltip badge
 # ---------------------------------------------------------------------------
 
 def _field(label_text: str, default: str, tooltip: str,
@@ -299,13 +311,13 @@ def _field(label_text: str, default: str, tooltip: str,
     edit = QLineEdit(default)
     edit.setToolTip(tooltip)
     layout.addWidget(edit, row, 1)
-    help_lbl = QLabel("?")
-    help_lbl.setToolTip(tooltip)
-    help_lbl.setStyleSheet(
+    badge = QLabel("?")
+    badge.setToolTip(tooltip)
+    badge.setStyleSheet(
         "color: white; background: #555; border-radius: 8px; "
         "padding: 1px 5px; font-weight: bold;"
     )
-    layout.addWidget(help_lbl, row, 2)
+    layout.addWidget(badge, row, 2)
     return edit
 
 
@@ -323,13 +335,34 @@ class ExperimentPanel(QWidget):
         self._session = session_manager
 
         root = QVBoxLayout(self)
-        root.setSpacing(8)
+        root.setSpacing(6)
+        root.setContentsMargins(6, 6, 6, 6)
 
-        root.addWidget(self._build_params_group())
-        root.addWidget(self._build_well_selection_group())
-        root.addWidget(self._build_presets_group())
-        root.addWidget(self._build_controls_group())
-        root.addStretch()
+        # 1. Well selection — top, takes most vertical space
+        self.well_selection = WellSelectionWidget()
+        root.addWidget(self.well_selection, stretch=3)
+
+        # Sync button just above the well grid
+        sync_row = QHBoxLayout()
+        sync_btn = QPushButton("Sync Well Grid from Calibration")
+        sync_btn.setToolTip(
+            "Load the well-plate dimensions from the Calibration tab\n"
+            "and rebuild this selection grid to match."
+        )
+        sync_btn.clicked.connect(self._sync_from_calibration)
+        sync_row.addWidget(sync_btn)
+        sync_row.addStretch()
+        # Insert above well_selection
+        root.insertLayout(0, sync_row)
+
+        # 2. Parameters
+        root.addWidget(self._build_params_group(), stretch=0)
+
+        # 3. Presets
+        root.addWidget(self._build_presets_group(), stretch=0)
+
+        # 4. Run controls
+        root.addWidget(self._build_controls_group(), stretch=0)
 
         self._load_from_session()
 
@@ -349,43 +382,13 @@ class ExperimentPanel(QWidget):
             "Used to name the output folder: YYYYMMDD_HHMMSS_<name>/"
         )
         layout.addWidget(self.exp_name_input, 0, 1)
-        name_help = QLabel("?")
-        name_help.setToolTip(self.exp_name_input.toolTip())
-        name_help.setStyleSheet(
-            "color: white; background: #555; border-radius: 8px; padding: 1px 5px; font-weight: bold;"
+        name_badge = QLabel("?")
+        name_badge.setToolTip(self.exp_name_input.toolTip())
+        name_badge.setStyleSheet(
+            "color: white; background: #555; border-radius: 8px; "
+            "padding: 1px 5px; font-weight: bold;"
         )
-        layout.addWidget(name_help, 0, 2)
-
-        # Well plate dimensions (read-only display; source of truth is calibration panel)
-        layout.addWidget(QLabel("Well Plate Columns:"), 1, 0)
-        self.width_spinbox = QSpinBox()
-        self.width_spinbox.setRange(1, 48)
-        self.width_spinbox.setValue(12)
-        self.width_spinbox.setToolTip(
-            "Number of columns in the well plate.\n"
-            "This is synced from the Calibration tab.\n"
-            "Standard: 96-well=12, 48-well=8, 24-well=6, 12-well=4, 6-well=3."
-        )
-        layout.addWidget(self.width_spinbox, 1, 1)
-        w_help = QLabel("?")
-        w_help.setToolTip(self.width_spinbox.toolTip())
-        w_help.setStyleSheet("color: white; background: #555; border-radius: 8px; padding: 1px 5px; font-weight: bold;")
-        layout.addWidget(w_help, 1, 2)
-
-        layout.addWidget(QLabel("Well Plate Rows:"), 2, 0)
-        self.depth_spinbox = QSpinBox()
-        self.depth_spinbox.setRange(1, 48)
-        self.depth_spinbox.setValue(8)
-        self.depth_spinbox.setToolTip(
-            "Number of rows in the well plate.\n"
-            "This is synced from the Calibration tab.\n"
-            "Standard: 96-well=8, 48-well=6, 24-well=4, 12-well=3, 6-well=2."
-        )
-        layout.addWidget(self.depth_spinbox, 2, 1)
-        d_help = QLabel("?")
-        d_help.setToolTip(self.depth_spinbox.toolTip())
-        d_help.setStyleSheet("color: white; background: #555; border-radius: 8px; padding: 1px 5px; font-weight: bold;")
-        layout.addWidget(d_help, 2, 2)
+        layout.addWidget(name_badge, 0, 2)
 
         self.param_inputs: dict[str, QLineEdit] = {}
         timing_params = [
@@ -407,39 +410,18 @@ class ExperimentPanel(QWidget):
              "Useful for letting the sample recover or settle."),
         ]
         for i, (key, default, label_text, tip) in enumerate(timing_params):
-            edit = _field(label_text, default, tip, layout, i + 3)
+            edit = _field(label_text, default, tip, layout, i + 1)
             self.param_inputs[key] = edit
             edit.textChanged.connect(self._autosave)
 
         self.exp_name_input.textChanged.connect(self._autosave)
-        self.width_spinbox.valueChanged.connect(self._on_dimensions_changed)
-        self.depth_spinbox.valueChanged.connect(self._on_dimensions_changed)
-
         return grp
-
-    def _build_well_selection_group(self) -> QWidget:
-        self.well_selection = WellSelectionWidget()
-
-        # Sync button — pulls rows/cols from the calibration panel
-        sync_btn = QPushButton("Sync from Calibration")
-        sync_btn.setToolTip(
-            "Load the well-plate dimensions from the Calibration tab\n"
-            "and rebuild this selection grid to match."
-        )
-        sync_btn.clicked.connect(self._sync_from_calibration)
-
-        container = QWidget()
-        vbox = QVBoxLayout(container)
-        vbox.setContentsMargins(0, 0, 0, 0)
-        vbox.addWidget(sync_btn)
-        vbox.addWidget(self.well_selection)
-        return container
 
     def _build_presets_group(self) -> QGroupBox:
         grp = QGroupBox("Presets")
         grp.setToolTip(
-            "Save the current parameters as a named preset so you can quickly\n"
-            "recall them for a particular experimental setup."
+            "Save the current parameters as a named preset.\n"
+            f"Presets are stored in Documents/RoboCam/experiment_presets/"
         )
         layout = QHBoxLayout(grp)
 
@@ -496,25 +478,11 @@ class ExperimentPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _sync_from_calibration(self):
-        """Pull rows/cols from the calibration panel and rebuild the well grid."""
         if self.calibration_panel is None:
             return
         cols, rows = self.calibration_panel.get_well_dimensions()
-        # Block signals to avoid double-rebuild
-        self.width_spinbox.blockSignals(True)
-        self.depth_spinbox.blockSignals(True)
-        self.width_spinbox.setValue(cols)
-        self.depth_spinbox.setValue(rows)
-        self.width_spinbox.blockSignals(False)
-        self.depth_spinbox.blockSignals(False)
         self.well_selection.rebuild(rows, cols)
         logger.info(f"[Experiment] Synced well grid from calibration: {rows}×{cols}")
-
-    def _on_dimensions_changed(self):
-        rows = self.depth_spinbox.value()
-        cols = self.width_spinbox.value()
-        self.well_selection.rebuild(rows, cols)
-        self._autosave()
 
     # ------------------------------------------------------------------
     # Experiment control
@@ -533,6 +501,8 @@ class ExperimentPanel(QWidget):
                 return
             corners.append(pos)
 
+        cols, rows = self.calibration_panel.get_well_dimensions()
+
         selected_indices = self.well_selection.get_selected_indices()
         if not selected_indices:
             QMessageBox.warning(self, "No Wells Selected",
@@ -546,11 +516,7 @@ class ExperimentPanel(QWidget):
             params = {k: float(v.text()) for k, v in self.param_inputs.items()}
             params["name"] = self.exp_name_input.text()
             params["selected_well_indices"] = selected_indices
-            well_plate = WellPlate(
-                width=self.width_spinbox.value(),
-                depth=self.depth_spinbox.value(),
-                corners=corners,
-            )
+            well_plate = WellPlate(width=cols, depth=rows, corners=corners)
             experiment = Experiment(hw_manager, well_plate, params)
         except Exception as e:
             self.status_label.setText(f"Status: Error — {e}")
@@ -561,8 +527,7 @@ class ExperimentPanel(QWidget):
         self.experiment_runner.start()
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        n = len(selected_indices)
-        self.status_label.setText(f"Status: Running… ({n} wells)")
+        self.status_label.setText(f"Status: Running… ({len(selected_indices)} wells)")
 
     def _stop_experiment(self):
         if self.experiment_runner and self.experiment_runner.isRunning():
@@ -576,61 +541,75 @@ class ExperimentPanel(QWidget):
         self.experiment_runner = None
 
     # ------------------------------------------------------------------
-    # Presets
+    # Presets — stored as JSON files in Documents/RoboCam/experiment_presets/
     # ------------------------------------------------------------------
+
+    def _preset_dir(self) -> Path:
+        d = _default_preset_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
     def _current_values(self) -> dict:
         d = {k: v.text() for k, v in self.param_inputs.items()}
         d["name"] = self.exp_name_input.text()
-        d["well_plate_width"] = self.width_spinbox.value()
-        d["well_plate_depth"] = self.depth_spinbox.value()
         return d
 
     def _apply_values(self, d: dict):
         self.exp_name_input.setText(d.get("name", "my_experiment"))
-        self.width_spinbox.setValue(int(d.get("well_plate_width", 12)))
-        self.depth_spinbox.setValue(int(d.get("well_plate_depth", 8)))
         for k, edit in self.param_inputs.items():
             if k in d:
                 edit.setText(str(d[k]))
 
     def _refresh_presets(self):
         self.preset_combo.clear()
-        for name in session_manager.list_presets():
-            self.preset_combo.addItem(name)
+        preset_dir = self._preset_dir()
+        for f in sorted(preset_dir.glob("*.json")):
+            self.preset_combo.addItem(f.stem)
 
     def _save_preset(self):
         name, ok = QInputDialog.getText(self, "Save Preset", "Preset name:")
-        if ok and name.strip():
-            session_manager.save_preset(name.strip(), self._current_values())
-            self._refresh_presets()
-            idx = self.preset_combo.findText(name.strip())
-            if idx >= 0:
-                self.preset_combo.setCurrentIndex(idx)
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        path = self._preset_dir() / f"{name}.json"
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._current_values(), f, indent=2)
+        except OSError as e:
+            QMessageBox.critical(self, "Save Error", str(e))
+            return
+        self._refresh_presets()
+        idx = self.preset_combo.findText(name)
+        if idx >= 0:
+            self.preset_combo.setCurrentIndex(idx)
 
     def _load_preset(self):
         name = self.preset_combo.currentText()
         if not name:
             return
-        data = session_manager.load_preset(name)
-        if data:
+        path = self._preset_dir() / f"{name}.json"
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
             self._apply_values(data)
+        except (OSError, json.JSONDecodeError) as e:
+            QMessageBox.critical(self, "Load Error", str(e))
 
     def _delete_preset(self):
         name = self.preset_combo.currentText()
         if not name:
             return
         reply = QMessageBox.question(
-            self, "Delete Preset",
-            f"Delete preset '{name}'?",
+            self, "Delete Preset", f"Delete preset '{name}'?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            session_manager.delete_preset(name)
+            path = self._preset_dir() / f"{name}.json"
+            path.unlink(missing_ok=True)
             self._refresh_presets()
 
     # ------------------------------------------------------------------
-    # Session persistence
+    # Session persistence (timing params + name only — not well selection)
     # ------------------------------------------------------------------
 
     def _autosave(self):
@@ -639,7 +618,3 @@ class ExperimentPanel(QWidget):
     def _load_from_session(self):
         s = self._session.get_session("experiment")
         self._apply_values(s)
-        self.well_selection.rebuild(
-            self.depth_spinbox.value(),
-            self.width_spinbox.value(),
-        )
