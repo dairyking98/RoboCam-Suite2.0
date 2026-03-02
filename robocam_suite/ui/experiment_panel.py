@@ -452,14 +452,6 @@ class ExperimentPanel(QWidget):
         col3_layout.setContentsMargins(4, 4, 4, 4)
         col3_layout.setSpacing(4)
 
-        sync_btn = QPushButton("Sync Grid from Calibration")
-        sync_btn.setToolTip(
-            "Load the well-plate dimensions from the Calibration tab\n"
-            "and rebuild this selection grid to match."
-        )
-        sync_btn.clicked.connect(self._sync_from_calibration)
-        col3_layout.addWidget(sync_btn)
-
         self.well_selection = WellSelectionWidget()
         col3_layout.addWidget(self.well_selection, stretch=1)
         splitter.addWidget(col3)
@@ -635,6 +627,11 @@ class ExperimentPanel(QWidget):
         delete_btn.clicked.connect(self._delete_preset)
         layout.addWidget(delete_btn)
 
+        self._preset_dir_label = QLabel(str(_default_preset_dir()))
+        self._preset_dir_label.setStyleSheet(LABEL_STYLE)
+        self._preset_dir_label.setWordWrap(True)
+        layout.addWidget(self._preset_dir_label)
+
         self._preset_status = QLabel("")
         self._preset_status.setStyleSheet(STATUS_STYLE)
         layout.addWidget(self._preset_status)
@@ -682,7 +679,8 @@ class ExperimentPanel(QWidget):
     # Calibration sync
     # ------------------------------------------------------------------
 
-    def _sync_from_calibration(self):
+    def sync_from_calibration(self):
+        """Called by MainWindow whenever calibration changes or on startup."""
         if self.calibration_panel is None:
             return
         cols, rows = self.calibration_panel.get_well_dimensions()

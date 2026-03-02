@@ -125,18 +125,19 @@ class _LivePreview(QWidget):
 # ---------------------------------------------------------------------------
 
 class _WellMapButton(QPushButton):
+    # Matches the experiment panel's WellSelectionWidget selected style
     IDLE_STYLE = (
-        "background:#444; color:#ccc; border:1px solid #333; "
-        "border-radius:2px; font-size:8px; padding:0px;"
+        "background-color: #2a7ae2; color: white; border: 1px solid #1a5ab2; "
+        "border-radius: 3px; font-size: 9px; padding: 1px;"
     )
     HOVER_STYLE = (
-        "background:#2a7ae2; color:white; border:1px solid #1a5ab2; "
-        "border-radius:2px; font-size:8px; padding:0px;"
+        "background-color: #1a5ab2; color: white; border: 1px solid #0a3a82; "
+        "border-radius: 3px; font-size: 9px; padding: 1px;"
     )
 
     def __init__(self, label: str, parent=None):
         super().__init__(label, parent)
-        self.setFixedSize(32, 20)
+        self.setFixedSize(36, 24)
         self.setStyleSheet(self.IDLE_STYLE)
         self.setToolTip(f"Move stage to well {label}")
 
@@ -180,7 +181,7 @@ class WellMapWidget(QGroupBox):
         outer.setContentsMargins(4, 4, 4, 4)
         outer.addWidget(scroll, stretch=1)
 
-        self._placeholder = QLabel("Set all four corners\nand click Generate\nto build the map.")
+        self._placeholder = QLabel("Set all four corners\nor load a calibration\nto build the map.")
         self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._placeholder.setStyleSheet("color: gray; font-size: 10px;")
         outer.addWidget(self._placeholder)
@@ -288,21 +289,6 @@ class CalibrationPanel(QWidget):
         col3_layout = QVBoxLayout(col3)
         col3_layout.setContentsMargins(4, 4, 4, 4)
         col3_layout.setSpacing(4)
-
-        map_btn_row = QHBoxLayout()
-        gen_btn = QPushButton("Generate Well Map")
-        gen_btn.setToolTip(
-            "Compute all well positions from the four corners and populate\n"
-            "the map. Requires all four corners to be set."
-        )
-        gen_btn.clicked.connect(self._generate_well_map)
-        map_btn_row.addWidget(gen_btn)
-        clear_btn = QPushButton("Clear")
-        clear_btn.setToolTip("Remove the well map.")
-        clear_btn.setFixedWidth(50)
-        clear_btn.clicked.connect(lambda: self.well_map.clear())
-        map_btn_row.addWidget(clear_btn)
-        col3_layout.addLayout(map_btn_row)
 
         self.well_map = WellMapWidget()
         self.well_map.well_clicked.connect(self._goto_xyz)
@@ -567,12 +553,19 @@ class CalibrationPanel(QWidget):
             )
             self.corners[name]["label"].setStyleSheet("color: green;")
             self._persist_corners()
+            # Auto-generate the well map whenever all four corners are now set
+            self._try_auto_generate_well_map()
         except Exception as e:
             logger.warning(f"[Calibration] Set corner error: {e}")
 
     # ------------------------------------------------------------------
     # Actions — well map
     # ------------------------------------------------------------------
+
+    def _try_auto_generate_well_map(self):
+        """Generate the well map silently if all four corners are set."""
+        if all(self.corners[n]["position"] is not None for n in CORNER_NAMES):
+            self._generate_well_map()
 
     def _compute_well_positions(self) -> Optional[list]:
         corners = [self.corners[n]["position"] for n in CORNER_NAMES]
@@ -601,10 +594,6 @@ class CalibrationPanel(QWidget):
     def _generate_well_map(self):
         positions = self._compute_well_positions()
         if positions is None:
-            QMessageBox.warning(
-                self, "Corners Not Set",
-                "Please set all four corner positions before generating the well map."
-            )
             return
         self.well_map.build(
             rows=self.rows_spin.value(),
@@ -644,7 +633,7 @@ class CalibrationPanel(QWidget):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             self._cal_status_label.setText(f"Saved: {Path(path).name}")
-            self._cal_status_label.setStyleSheet("font-size: 10px; color: green;")
+            self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
             logger.info(f"[Calibration] Saved to {path}")
         except OSError as e:
             QMessageBox.critical(self, "Save Error", str(e))
@@ -683,7 +672,7 @@ class CalibrationPanel(QWidget):
 
         self._persist_corners()
         self._cal_status_label.setText(f"Loaded: {Path(path).name}")
-        self._cal_status_label.setStyleSheet("font-size: 10px; color: green;")
+        self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
         logger.info(f"[Calibration] Loaded from {path}")
         self._generate_well_map()
 
