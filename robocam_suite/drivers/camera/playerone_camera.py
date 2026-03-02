@@ -227,9 +227,8 @@ class PlayerOneCamera(Camera):
         poa.SetGain(self._cam_id, gain, False)
 
         # Allocate image buffer
-        bytes_per_pixel = 2 if self._img_format in (
-            poa.POAImgFormat.POA_RAW16, poa.POAImgFormat.POA_MONO16
-        ) else 1
+        # POA_RAW16 is the only 16-bit format in this SDK (no POA_MONO16)
+        bytes_per_pixel = 2 if self._img_format == poa.POAImgFormat.POA_RAW16 else 1
         self._buf = np.zeros(self._width * self._height * bytes_per_pixel, dtype=np.uint8)
 
         logger.info(
@@ -343,9 +342,8 @@ class PlayerOneCamera(Camera):
             self._check(self._poa.SetImageSize(self._cam_id, w, h), "SetImageSize")
             _, self._width, self._height = self._poa.GetImageSize(self._cam_id)  # returns (err, w, h)
             # Re-allocate buffer
-            bytes_per_pixel = 2 if self._img_format in (
-                self._poa.POAImgFormat.POA_RAW16, self._poa.POAImgFormat.POA_MONO16
-            ) else 1
+            # POA_RAW16 is the only 16-bit format in this SDK (no POA_MONO16)
+            bytes_per_pixel = 2 if self._img_format == self._poa.POAImgFormat.POA_RAW16 else 1
             self._buf = np.zeros(self._width * self._height * bytes_per_pixel, dtype=np.uint8)
             if was_capturing:
                 self.start_capture()
