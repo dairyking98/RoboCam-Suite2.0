@@ -33,7 +33,7 @@ from typing import Optional
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QGridLayout, QLabel, QLineEdit, QGroupBox,
-    QComboBox, QInputDialog, QMessageBox,
+    QComboBox, QFileDialog, QMessageBox,
     QScrollArea, QSplitter, QButtonGroup, QRadioButton,
     QStackedWidget,
 )
@@ -600,43 +600,28 @@ class ExperimentPanel(QWidget):
         return self._image_grp
 
     def _build_presets_group(self) -> QGroupBox:
-        grp = QGroupBox("Presets")
+        grp = QGroupBox("Experiment Preset")
         grp.setToolTip(
-            "Save the current parameters as a named preset.\n"
-            "Presets are stored in Documents/RoboCam/experiment_presets/"
+            "Save the current parameters to a JSON file or load a previously saved preset.\n"
+            "Default location: Documents/RoboCam/experiment_presets/"
         )
         layout = QHBoxLayout(grp)
 
-        self.preset_combo = QComboBox()
-        self.preset_combo.setToolTip("Select a saved preset to load.")
-        self.preset_combo.setMinimumWidth(140)
-        layout.addWidget(self.preset_combo)
-
-        load_btn = QPushButton("Load")
-        load_btn.setToolTip("Load the selected preset.")
-        load_btn.clicked.connect(self._load_preset)
-        layout.addWidget(load_btn)
-
-        save_btn = QPushButton("Save As…")
-        save_btn.setToolTip("Save the current parameters as a new named preset.")
+        save_btn = QPushButton("Save Preset…")
+        save_btn.setToolTip("Save the current experiment parameters to a JSON file.")
         save_btn.clicked.connect(self._save_preset)
         layout.addWidget(save_btn)
 
-        delete_btn = QPushButton("Delete")
-        delete_btn.setToolTip("Delete the selected preset permanently.")
-        delete_btn.clicked.connect(self._delete_preset)
-        layout.addWidget(delete_btn)
-
-        self._preset_dir_label = QLabel(str(_default_preset_dir()))
-        self._preset_dir_label.setStyleSheet(LABEL_STYLE)
-        self._preset_dir_label.setWordWrap(True)
-        layout.addWidget(self._preset_dir_label)
+        load_btn = QPushButton("Load Preset…")
+        load_btn.setToolTip("Load experiment parameters from a previously saved JSON file.")
+        load_btn.clicked.connect(self._load_preset)
+        layout.addWidget(load_btn)
 
         self._preset_status = QLabel("")
         self._preset_status.setStyleSheet(STATUS_STYLE)
         layout.addWidget(self._preset_status)
 
-        self._refresh_presets()
+        layout.addStretch()
         return grp
 
     def _build_controls_group(self) -> QGroupBox:
@@ -773,54 +758,42 @@ class ExperimentPanel(QWidget):
             if f"video_{k}" in d:
                 edit.setText(str(d[f"video_{k}"]))
 
-    def _refresh_presets(self):
-        self.preset_combo.clear()
-        for f in sorted(_default_preset_dir().glob("*.json")):
-            self.preset_combo.addItem(f.stem)
-
     def _save_preset(self):
-        name, ok = QInputDialog.getText(self, "Save Preset", "Preset name:")
-        if not ok or not name.strip():
+        preset_dir = _default_preset_dir()
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Experiment Preset",
+            str(preset_dir / "preset.json"),
+            "JSON Files (*.json)"
+        )
+        if not path:
             return
-        name = name.strip()
-        path = _default_preset_dir() / f"{name}.json"
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(self._current_values(), f, indent=2)
-            self._preset_status.setText(f"Saved: {name}")
+            self._preset_status.setText(f"Saved: {Path(path).name}")
+            self._preset_status.setStyleSheet(STATUS_STYLE)
+            logger.info(f"[Experiment] Preset saved to {path}")
         except OSError as e:
             QMessageBox.critical(self, "Save Error", str(e))
-            return
-        self._refresh_presets()
-        idx = self.preset_combo.findText(name)
-        if idx >= 0:
-            self.preset_combo.setCurrentIndex(idx)
 
     def _load_preset(self):
-        name = self.preset_combo.currentText()
-        if not name:
+        preset_dir = _default_preset_dir()
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Experiment Preset",
+            str(preset_dir),
+            "JSON Files (*.json)"
+        )
+        if not path:
             return
-        path = _default_preset_dir() / f"{name}.json"
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self._apply_values(data)
-            self._preset_status.setText(f"Loaded: {name}")
+            self._preset_status.setText(f"Loaded: {Path(path).name}")
+            self._preset_status.setStyleSheet(STATUS_STYLE)
+            logger.info(f"[Experiment] Preset loaded from {path}")
         except (OSError, json.JSONDecodeError) as e:
             QMessageBox.critical(self, "Load Error", str(e))
-
-    def _delete_preset(self):
-        name = self.preset_combo.currentText()
-        if not name:
-            return
-        reply = QMessageBox.question(
-            self, "Delete Preset", f"Delete preset '{name}'?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            (_default_preset_dir() / f"{name}.json").unlink(missing_ok=True)
-            self._refresh_presets()
-            self._preset_status.setText("")
 
     # ------------------------------------------------------------------
     # Session persistence
