@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "robocam-suite"
+version = "2.0.0"
+description = "Modular robotic camera control suite for automated imaging experiments"
+requires-python = ">=3.10"
+dependencies = [
+    "pyserial",
+    "numpy",
+    "opencv-python",
+    "PySide6",
+]
+
+[project.scripts]
+robocam = "robocam_suite.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["robocam_suite*"]

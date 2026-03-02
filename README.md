@@ -6,51 +6,68 @@ This is a complete overhaul of the original RoboCam-Suite, redesigned from the g
 
 ## Key Features
 
-- **Modular Architecture:** Core interfaces for cameras, motion controllers, and GPIO are separated from their concrete implementations. This allows for easy swapping of hardware components.
-- **Cross-Platform:** Designed to run on Windows, macOS, and Linux. Hardware access is abstracted to support platform-specific libraries.
+- **Modular Architecture:** Core interfaces for cameras, motion controllers, and GPIO are separated from their concrete implementations.
+- **Cross-Platform:** Designed to run on Windows, macOS, and Linux.
+- **Virtual Environment Support:** Includes setup scripts for Windows, macOS, and Linux to automatically create a self-contained virtual environment.
 - **Simulation Mode:** All hardware components can be run in a simulation mode, allowing for development and testing without physical hardware.
-- **PySide6 GUI:** A modern and responsive graphical user interface built with PySide6, providing a user-friendly way to control the system.
-- **Well-Plate Calibration:** A dedicated calibration panel allows for easy and accurate calibration of well-plate positions using bilinear interpolation.
+- **PySide6 GUI:** A modern and responsive graphical user interface built with PySide6.
+- **Well-Plate Calibration:** A dedicated calibration panel allows for easy and accurate calibration of well-plate positions.
 - **Experiment Automation:** A flexible experiment engine allows for the creation and execution of automated imaging sequences.
-
-## Project Structure
-
-```
-RoboCam-Suite2.0/
-├── robocam_suite/
-│   ├── core/               # Core abstract base classes for hardware
-│   ├── drivers/            # Concrete hardware driver implementations
-│   │   ├── camera/
-│   │   ├── gpio/
-│   │   └── motion/
-│   ├── experiments/        # Experiment logic and well-plate generation
-│   ├── ui/                 # PySide6 GUI components
-│   ├── config/             # Configuration files and manager
-│   ├── logger.py           # Logging setup
-│   └── hw_manager.py       # Hardware manager for driver instantiation
-├── archive/                # Original 1.0 source code
-├── docs/                   # Project documentation
-├── main.py                 # Main application entry point
-└── requirements.txt        # Python dependencies
-```
 
 ## Getting Started
 
-1.  **Install Dependencies:**
+This project uses a Python virtual environment to manage its dependencies. Follow the steps for your operating system to get set up.
 
-    ```bash
-    pip install -r requirements.txt
-    ```
+### 1. First-Time Setup
 
-2.  **Configure Hardware:**
+Run the setup script for your platform. This will create a virtual environment in a `.venv` folder and install all required dependencies.
 
-    Modify `robocam_suite/config/default_config.json` to match your hardware setup. You can select the appropriate drivers and specify connection parameters (e.g., serial ports, camera indices).
+- **Windows:**
+  Open Command Prompt and run:
+  ```cmd
+  setup.bat
+  ```
 
-3.  **Run the Application:**
+- **macOS & Linux:**
+  Open a terminal and run:
+  ```bash
+  bash setup.sh
+  ```
 
-    ```bash
-    python main.py
-    ```
+### 2. Activate the Environment
+
+Before running the application, you must **activate** the virtual environment in your terminal session.
+
+- **Windows:**
+  ```cmd
+  .venv\Scripts\activate
+  ```
+
+- **macOS & Linux:**
+  ```bash
+  source .venv/bin/activate
+  ```
+  Your terminal prompt should now be prefixed with `(.venv)`.
+
+### 3. Configure Your Hardware
+
+Modify `robocam_suite/config/default_config.json` to match your hardware setup. You can select the appropriate drivers and specify connection parameters (e.g., serial ports, baud rates, camera indices).
+
+See the comments inside the config file for guidance on common settings.
+
+### 4. Run the Application
+
+With the virtual environment activated, launch the application:
+
+```bash
+python main.py
+```
+
+Alternatively, you can run it as an installed package:
+
+```bash
+python -m robocam_suite
+```
 
 ## Developer Guide
 
