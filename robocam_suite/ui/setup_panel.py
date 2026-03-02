@@ -210,9 +210,35 @@ class SetupPanel(QWidget):
         self.cam_scan_status.setStyleSheet("color: gray; font-size: 10px;")
         layout.addWidget(self.cam_scan_status, 1, 0, 1, 3)
 
+        # Image format
+        layout.addWidget(QLabel("Image format:"), 2, 0)
+        self.img_format_combo = QComboBox()
+        for fmt in ["PNG", "TIFF", "JPEG"]:
+            self.img_format_combo.addItem(fmt)
+        self.img_format_combo.setToolTip(
+            "File format for saved images (Quick Capture and Image Capture mode).\n"
+            "PNG  \u2014 lossless, best for analysis.\n"
+            "TIFF \u2014 lossless, maximum compatibility with ImageJ/Fiji.\n"
+            "JPEG \u2014 lossy, smaller files."
+        )
+        layout.addWidget(self.img_format_combo, 2, 1, 1, 2)
+
+        # Video format
+        layout.addWidget(QLabel("Video format:"), 3, 0)
+        self.vid_format_combo = QComboBox()
+        for fmt in ["AVI (MJPG)", "AVI (XVID)", "MP4 (avc1)"]:
+            self.vid_format_combo.addItem(fmt)
+        self.vid_format_combo.setToolTip(
+            "Container and codec for recorded video (Quick Capture and Video Capture mode).\n"
+            "AVI (MJPG) \u2014 best cross-platform compatibility.\n"
+            "AVI (XVID) \u2014 good compression, widely supported.\n"
+            "MP4 (avc1) \u2014 H.264, smallest files; requires compatible OpenCV build."
+        )
+        layout.addWidget(self.vid_format_combo, 3, 1, 1, 2)
+
         self.cam_apply_btn = QPushButton("Apply & Reconnect Camera")
         self.cam_apply_btn.clicked.connect(self._apply_camera)
-        layout.addWidget(self.cam_apply_btn, 2, 0, 1, 3)
+        layout.addWidget(self.cam_apply_btn, 4, 0, 1, 3)
         return grp
 
     def _build_printer_group(self) -> QGroupBox:

@@ -62,6 +62,12 @@ def _default_preset_dir() -> Path:
     return d
 
 
+def _default_output_dir() -> Path:
+    d = Path.home() / "Documents" / "RoboCam" / "captures"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 # ---------------------------------------------------------------------------
 # Camera frame grabber
 # ---------------------------------------------------------------------------
@@ -470,11 +476,20 @@ class ExperimentPanel(QWidget):
         btn_row.addWidget(self._preset_status, stretch=1)
         layout.addLayout(btn_row)
 
-        # Gray path label below the buttons
-        path_label = QLabel(str(_default_preset_dir()))
-        path_label.setStyleSheet(LABEL_STYLE)
-        path_label.setWordWrap(True)
-        layout.addWidget(path_label)
+        # Gray path label + ... folder button below the buttons
+        path_row = QHBoxLayout()
+        self._preset_dir_label = QLabel(str(_default_preset_dir()))
+        self._preset_dir_label.setStyleSheet(LABEL_STYLE)
+        self._preset_dir_label.setWordWrap(True)
+        self._preset_dir_label.setToolTip("Default folder for experiment preset files.")
+        path_row.addWidget(self._preset_dir_label, stretch=1)
+
+        preset_folder_btn = QPushButton("\u2026")
+        preset_folder_btn.setFixedWidth(28)
+        preset_folder_btn.setToolTip("Change the default preset folder.")
+        preset_folder_btn.clicked.connect(self._choose_preset_folder)
+        path_row.addWidget(preset_folder_btn)
+        layout.addLayout(path_row)
 
         return grp
 
@@ -502,6 +517,21 @@ class ExperimentPanel(QWidget):
 
         self.start_btn.clicked.connect(self._start_experiment)
         self.stop_btn.clicked.connect(self._stop_experiment)
+
+        # Output folder row
+        out_row = QHBoxLayout()
+        self._output_dir_label = QLabel(str(_default_output_dir()))
+        self._output_dir_label.setStyleSheet(LABEL_STYLE)
+        self._output_dir_label.setWordWrap(True)
+        self._output_dir_label.setToolTip("Folder where experiment captures will be saved.")
+        out_row.addWidget(self._output_dir_label, stretch=1)
+
+        output_folder_btn = QPushButton("\u2026")
+        output_folder_btn.setFixedWidth(28)
+        output_folder_btn.setToolTip("Change the output folder for captured images and videos.")
+        output_folder_btn.clicked.connect(self._choose_output_folder)
+        out_row.addWidget(output_folder_btn)
+        layout.addLayout(out_row)
 
         return grp
 
@@ -613,8 +643,40 @@ class ExperimentPanel(QWidget):
             if f"video_{k}" in d:
                 edit.setText(str(d[f"video_{k}"]))
 
+    def _choose_preset_folder(self):
+        """Let the user pick a different preset folder."""
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Preset Folder",
+            str(getattr(self, "_preset_dir", _default_preset_dir()))
+        )
+        if folder:
+            self._preset_dir = Path(folder)
+            self._preset_dir.mkdir(parents=True, exist_ok=True)
+            self._preset_dir_label.setText(str(self._preset_dir))
+
+    def _get_preset_dir(self) -> Path:
+        d = getattr(self, "_preset_dir", _default_preset_dir())
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _choose_output_folder(self):
+        """Let the user pick a different output folder for experiment captures."""
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Output Folder",
+            str(getattr(self, "_output_dir", _default_output_dir()))
+        )
+        if folder:
+            self._output_dir = Path(folder)
+            self._output_dir.mkdir(parents=True, exist_ok=True)
+            self._output_dir_label.setText(str(self._output_dir))
+
+    def _get_output_dir(self) -> Path:
+        d = getattr(self, "_output_dir", _default_output_dir())
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     def _save_preset(self):
-        preset_dir = _default_preset_dir()
+        preset_dir = self._get_preset_dir()
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Experiment Preset",
             str(preset_dir / "preset.json"),
@@ -631,7 +693,7 @@ class ExperimentPanel(QWidget):
             QMessageBox.critical(self, "Save Error", str(e))
 
     def _load_preset(self):
-        preset_dir = _default_preset_dir()
+        preset_dir = self._get_preset_dir()
         path, _ = QFileDialog.getOpenFileName(
             self, "Load Experiment Preset",
             str(preset_dir),

@@ -460,24 +460,45 @@ class CalibrationPanel(QWidget):
         grp = QGroupBox("Calibration File")
         grp.setToolTip(
             "Save the four corner positions to a JSON file so you can reload\n"
-            "them later without re-calibrating.\n"
-            "Default save location: Documents/RoboCam/calibrations/"
+            "them later without re-calibrating."
         )
-        layout = QHBoxLayout(grp)
+        root = QVBoxLayout(grp)
+        root.setSpacing(3)
+        root.setContentsMargins(6, 6, 6, 6)
 
-        save_btn = QPushButton("Save Calibration…")
+        # Row 1 — buttons
+        btn_row = QHBoxLayout()
+        save_btn = QPushButton("Save Calibration\u2026")
         save_btn.setToolTip("Save the current corner positions to a .json file.")
         save_btn.clicked.connect(self._save_calibration)
-        layout.addWidget(save_btn)
+        btn_row.addWidget(save_btn)
 
-        load_btn = QPushButton("Load Calibration…")
+        load_btn = QPushButton("Load Calibration\u2026")
         load_btn.setToolTip("Load corner positions from a previously saved .json file.")
         load_btn.clicked.connect(self._load_calibration)
-        layout.addWidget(load_btn)
+        btn_row.addWidget(load_btn)
+        root.addLayout(btn_row)
 
+        # Row 2 — gray path label + ... folder button
+        path_row = QHBoxLayout()
+        self._cal_dir_label = QLabel(str(_default_cal_dir()))
+        self._cal_dir_label.setStyleSheet(
+            "font-size: 10px; color: #888; font-style: italic;"
+        )
+        self._cal_dir_label.setToolTip("Default folder for calibration files.")
+        path_row.addWidget(self._cal_dir_label, stretch=1)
+
+        cal_folder_btn = QPushButton("\u2026")
+        cal_folder_btn.setFixedWidth(28)
+        cal_folder_btn.setToolTip("Change the default calibration folder.")
+        cal_folder_btn.clicked.connect(self._choose_cal_folder)
+        path_row.addWidget(cal_folder_btn)
+        root.addLayout(path_row)
+
+        # Row 3 — status label
         self._cal_status_label = QLabel("")
         self._cal_status_label.setStyleSheet("font-size: 10px; color: green;")
-        layout.addWidget(self._cal_status_label)
+        root.addWidget(self._cal_status_label)
 
         return grp
 
@@ -606,14 +627,30 @@ class CalibrationPanel(QWidget):
     # Actions — save / load calibration
     # ------------------------------------------------------------------
 
+    def _choose_cal_folder(self):
+        """Let the user pick a different default calibration folder."""
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Calibration Folder",
+            str(getattr(self, "_cal_dir", _default_cal_dir()))
+        )
+        if folder:
+            self._cal_dir = Path(folder)
+            self._cal_dir.mkdir(parents=True, exist_ok=True)
+            self._cal_dir_label.setText(str(self._cal_dir))
+
+    def _get_cal_dir(self) -> Path:
+        """Return the active calibration directory (custom or default)."""
+        d = getattr(self, "_cal_dir", _default_cal_dir())
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     def _save_calibration(self):
         corners = {n: self.corners[n]["position"] for n in CORNER_NAMES}
         if any(v is None for v in corners.values()):
             QMessageBox.warning(self, "Incomplete Calibration",
                                 "Please set all four corner positions before saving.")
             return
-        cal_dir = _default_cal_dir()
-        cal_dir.mkdir(parents=True, exist_ok=True)
+        cal_dir = self._get_cal_dir()
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Calibration",
             str(cal_dir / "calibration.json"),
@@ -636,8 +673,7 @@ class CalibrationPanel(QWidget):
             QMessageBox.critical(self, "Save Error", str(e))
 
     def _load_calibration(self):
-        cal_dir = _default_cal_dir()
-        cal_dir.mkdir(parents=True, exist_ok=True)
+        cal_dir = self._get_cal_dir()
         path, _ = QFileDialog.getOpenFileName(
             self, "Load Calibration",
             str(cal_dir),
