@@ -176,6 +176,15 @@ class _CameraEnumerator(QThread):
 
     def run(self):
         devices = []
+        try:
+            self._run_inner(devices)
+        except Exception as e:
+            logger.error(f"[CameraEnum] Unexpected error during camera scan: {e}", exc_info=True)
+        if not devices:
+            devices.append(("No cameras detected", "opencv", 0))
+        self.cameras_found.emit(devices)
+
+    def _run_inner(self, devices: list):  # noqa: C901
         os_name = platform.system()
 
         # Pre-fetch Windows device names once (avoids repeated COM calls)
@@ -240,39 +249,56 @@ class _CameraEnumerator(QThread):
         #   * Otherwise add it as driver=imaging_device with the PnP device ID
         #     and a note that a vendor SDK may be required.
         if os_name == "Windows":
-            imaging_devs = self._get_windows_imaging_devices()
+            try:
+                imaging_devs = self._get_windows_imaging_devices()
 
-            # Build lookup structures from the OpenCV probe results.
-            opencv_names_lower = {
-                d[0].split(" (index ")[0].strip().lower()
-                for d in devices if d[1] == "opencv"
-            }
-            # Reverse map: lower-case name -> OpenCV index (from win_names)
-            win_names_lower_to_idx = {
-                v.strip().lower(): k for k, v in win_names.items()
-            }
+                # Build lookup structures from the OpenCV probe results.
+                opencv_names_lower = {
+                    d[0].split(" (index ")[0].strip().lower()
+                    for d in devices if d[1] == "opencv"
+                }
+                # Also build a lower-case set from playerone entries so we
+                # don't add a WIA duplicate for a camera already found via SDK.
+                playerone_names_lower = {
+                    d[0].split(" (index ")[0].strip().lower()
+                    for d in devices if d[1] == "playerone"
+                }
+                # Reverse map: lower-case name -> OpenCV index (from win_names)
+                win_names_lower_to_idx = {
+                    v.strip().lower(): k for k, v in win_names.items()
+                }
 
-            for dev_name, dev_id in imaging_devs:
-                dev_lower = dev_name.strip().lower()
+                for dev_name, dev_id in imaging_devs:
+                    dev_lower = dev_name.strip().lower()
 
-                # Already listed via OpenCV probe — skip.
-                already_listed = any(
-                    dev_lower in ocv or ocv in dev_lower
-                    for ocv in opencv_names_lower
-                )
-                if already_listed:
-                    continue
+                    # Already listed via OpenCV probe — skip.
+                    already_listed = any(
+                        dev_lower in ocv or ocv in dev_lower
+                        for ocv in opencv_names_lower
+                    )
+                    if already_listed:
+                        continue
 
-                # Known to cv2-enumerate-cameras/win_names but not yet opened —
-                # promote to driver=opencv so the hardware manager can open it.
-                if dev_lower in win_names_lower_to_idx:
-                    opencv_idx = win_names_lower_to_idx[dev_lower]
-                    label = f"{dev_name.strip()} (index {opencv_idx})"
-                    devices.append((label, "opencv", opencv_idx))
-                else:
-                    # Truly WIA-only (scanner, ASCOM device, etc.)
-                    label = f"{dev_name.strip()}  [Imaging Device \u2014 may need vendor SDK]"
-                    devices.append((label, "imaging_device", dev_id))
+                    # Already listed via Player One SDK probe — skip.
+                    already_poa = any(
+                        dev_lower in poa or poa in dev_lower
+                        for poa in playerone_names_lower
+                    )
+                    if already_poa:
+                        continue
+
+                    # Known to cv2-enumerate-cameras/win_names but not yet opened —
+                    # promote to driver=opencv so the hardware manager can open it.
+                    if dev_lower in win_names_lower_to_idx:
+                        opencv_idx = win_names_lower_to_idx[dev_lower]
+                        label = f"{dev_name.strip()} (index {opencv_idx})"
+                        devices.append((label, "opencv", opencv_idx))
+                    else:
+                        # Truly WIA-only (scanner, ASCOM device, etc.)
+                        label = f"{dev_name.strip()}  [Imaging Device — may need vendor SDK]"
+                        devices.append((label, "imaging_device", dev_id))
+            except Exception as e:
+                logger.warning(f"[CameraEnum] Windows Imaging Devices scan failed: {e}")
 
         # --- Raspberry Pi camera via picamera2 ---
         try:
@@ -287,10 +313,8 @@ class _CameraEnumerator(QThread):
         except Exception as e:
             logger.debug(f"[CameraEnum] Picamera2 probe failed: {e}")
 
-        if not devices:
-            devices.append(("No cameras detected", "opencv", 0))
-
-        self.cameras_found.emit(devices)
+        # ("No cameras detected" fallback and cameras_found.emit are handled
+        #  in run() after _run_inner returns.)
 
 
 # ---------------------------------------------------------------------------
@@ -616,15 +640,28 @@ class SetupPanel(QWidget):
         # do nothing so the hardware manager is not left in a broken state.
         if driver == "imaging_device":
             from PySide6.QtWidgets import QMessageBox
+            # Check if this looks like a Player One camera so we can give
+            # a more specific fix instruction.
+            label_lower = label.lower()
+            is_poa = any(k in label_lower for k in ("player one", "playerone", "poa", "mars", "neptune", "uranus", "saturn", "jupiter"))
+            if is_poa:
+                extra = (
+                    "This looks like a Player One camera.\n\n"
+                    "The Player One SDK has not been installed yet.  "
+                    "Run the following command in your project directory, "
+                    "then re-scan:\n\n"
+                    "    python scripts\\install_playerone_sdk.py"
+                )
+            else:
+                extra = (
+                    "To use this device you need the manufacturer\u2019s SDK "
+                    "(e.g. EPSON Scan SDK or an ASCOM driver)."
+                )
             QMessageBox.warning(
                 self,
                 "Vendor SDK Required",
                 f"“{label}” is a WIA Imaging Device that cannot be opened "
-                f"directly by OpenCV.\n\n"
-                f"To use this device you need the manufacturer’s SDK "
-                f"(e.g. Player One SDK, EPSON Scan SDK, or an ASCOM driver).\n\n"
-                f"If this is a Player One camera, install the Player One SDK "
-                f"and the PlayerOneCamera Python package, then re-scan.",
+                f"directly by OpenCV.\n\n{extra}",
             )
             return
 
