@@ -116,6 +116,7 @@ class PlayerOneCamera(Camera):
         self._buf: Optional[np.ndarray] = None
 
         self._poa = None                            # pyPOACamera module reference
+        self._is_mono: bool = True                  # set properly in connect()
 
         # Lock so the live-preview thread and the experiment recording thread
         # cannot call into the SDK simultaneously (the SDK is not thread-safe).
@@ -190,8 +191,11 @@ class PlayerOneCamera(Camera):
             raise ConnectionError(f"[PlayerOne] GetCameraProperties failed: {err}")
         self._cam_id = props.cameraID
         model = props.cameraModelName.decode(errors="replace")
+        # Detect mono vs colour sensor via bayerPattern
+        self._is_mono: bool = (props.bayerPattern == poa.POABayerPattern.POA_BAYER_MONO)
         logger.info(f"[PlayerOne] Connecting to {model!r} | cameraID={self._cam_id} | "
-                    f"maxRes={props.maxWidth}x{props.maxHeight} | bitDepth={props.bitDepth}")
+                    f"maxRes={props.maxWidth}x{props.maxHeight} | bitDepth={props.bitDepth} | "
+                    f"mono={self._is_mono}")
 
         logger.info(f"[PlayerOne] Calling OpenCamera({self._cam_id})")
         self._check(poa.OpenCamera(self._cam_id), "OpenCamera")
@@ -335,12 +339,13 @@ class PlayerOneCamera(Camera):
             # 16-bit → 8-bit (scale to full range)
             frame = (frame >> 8).astype(np.uint8)
         if frame.ndim == 2:
-            # Mono or raw Bayer → convert to BGR
             import cv2
-            if self._img_format in (poa.POAImgFormat.POA_RAW8, poa.POAImgFormat.POA_RAW16):
-                frame = cv2.cvtColor(frame, cv2.COLOR_BAYER_RG2BGR)
-            else:
+            if self._is_mono:
+                # True monochrome sensor — raw pixels are grey, not Bayer
                 frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            else:
+                # Colour sensor with Bayer filter array
+                frame = cv2.cvtColor(frame, cv2.COLOR_BAYER_RG2BGR)
         return frame
 
     # ------------------------------------------------------------------
