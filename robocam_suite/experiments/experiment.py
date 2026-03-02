@@ -48,7 +48,15 @@ class Experiment:
         gpio_controller = self.hw_manager.get_gpio_controller()
         camera = self.hw_manager.get_camera()
 
-        laser_pin = self.params.get("laser_pin", 21) # Example pin
+        # Read laser pin from config; fall back to params, then to 21 as a last resort
+        laser_pin = (
+            self.hw_manager._config.get_section("gpio_controller").get("laser_pin")
+            or self.params.get("laser_pin", 21)
+        )
+        if not self.hw_manager.gpio_enabled:
+            logger.info(
+                "GPIO is disabled — laser commands will be silently ignored by NullGPIOController."
+            )
 
         try:
             for i, position in enumerate(self.well_plate.get_path()):
