@@ -56,10 +56,12 @@ class _CameraEnumerator(QThread):
     def _get_windows_camera_names() -> dict:
         """
         Return a dict mapping OpenCV index -> human-readable device name on Windows.
-        Tries cv2-enumerate-cameras first, then pygrabber, then WMI.
+        Tries cv2-enumerate-cameras first (covers both Camera and Imaging Device
+        classes), then pygrabber (DirectShow), then WMI as a last resort.
         Returns empty dict on failure so the caller can fall back gracefully.
         """
-        # Method 1: cv2-enumerate-cameras (best — maps index directly)
+        # Method 1: cv2-enumerate-cameras — best, covers all DirectShow sources
+        # including Imaging Devices (microscopes, scientific cameras, etc.)
         try:
             from cv2_enumerate_cameras import enumerate_cameras  # type: ignore
             return {info.index: info.name for info in enumerate_cameras()}
@@ -68,7 +70,7 @@ class _CameraEnumerator(QThread):
         except Exception as e:
             logger.debug(f"[CameraEnum] cv2-enumerate-cameras failed: {e}")
 
-        # Method 2: pygrabber (Windows DirectShow)
+        # Method 2: pygrabber (DirectShow) — also covers Imaging Devices
         try:
             from pygrabber.dshow_graph import FilterGraph  # type: ignore
             graph = FilterGraph()
@@ -79,13 +81,18 @@ class _CameraEnumerator(QThread):
         except Exception as e:
             logger.debug(f"[CameraEnum] pygrabber failed: {e}")
 
-        # Method 3: WMI (always present on Windows, no extra install)
+        # Method 3: WMI — query both PNPClass="Camera" AND PNPClass="Image"
+        # "Camera" covers webcams; "Image" covers WIA imaging devices
+        # (microscope cameras, scanners, Player One, etc.)
         try:
             import wmi  # type: ignore
             c = wmi.WMI()
             names = {}
-            for i, cam in enumerate(c.Win32_PnPEntity(PNPClass="Camera")):
-                names[i] = cam.Name
+            idx = 0
+            for pnp_class in ("Camera", "Image"):
+                for cam in c.Win32_PnPEntity(PNPClass=pnp_class):
+                    names[idx] = cam.Name
+                    idx += 1
             if names:
                 return names
         except ImportError:
@@ -94,6 +101,28 @@ class _CameraEnumerator(QThread):
             logger.debug(f"[CameraEnum] WMI failed: {e}")
 
         return {}
+
+    @staticmethod
+    def _get_windows_imaging_devices() -> list:
+        """
+        Return a list of (name, pnp_device_id) for devices in the Windows
+        'Image' device class (WIA — microscopes, scientific cameras, scanners).
+        These are listed separately from OpenCV-accessible cameras because they
+        may require a vendor SDK rather than a plain VideoCapture index.
+        Returns empty list if WMI is unavailable or no devices found.
+        """
+        try:
+            import wmi  # type: ignore
+            c = wmi.WMI()
+            devices = []
+            for dev in c.Win32_PnPEntity(PNPClass="Image"):
+                devices.append((dev.Name, dev.DeviceID))
+            return devices
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"[CameraEnum] WMI imaging devices failed: {e}")
+        return []
 
     def run(self):
         devices = []
@@ -138,6 +167,21 @@ class _CameraEnumerator(QThread):
             pass
         except Exception as e:
             logger.debug(f"[CameraEnum] PlayerOne probe failed: {e}")
+
+        # --- Windows Imaging Devices (WIA class: microscopes, scientific cameras) ---
+        # These are listed as informational entries; they may require a vendor SDK
+        # (e.g. Player One SDK, ASCOM) rather than a plain OpenCV index.
+        # We only add them if they are NOT already covered by the OpenCV probe above
+        # (i.e. they don't open via cv2.VideoCapture).
+        if os_name == "Windows":
+            imaging_devs = self._get_windows_imaging_devices()
+            # Build a set of names already found via OpenCV to avoid duplicates
+            opencv_names_found = {d[0].split(" (index ")[0].strip() for d in devices
+                                  if d[1] == "opencv"}
+            for dev_name, dev_id in imaging_devs:
+                if dev_name not in opencv_names_found:
+                    label = f"{dev_name}  [Imaging Device — may need vendor SDK]"
+                    devices.append((label, "imaging_device", dev_id))
 
         # --- Raspberry Pi camera via picamera2 ---
         try:
