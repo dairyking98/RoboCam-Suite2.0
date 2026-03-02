@@ -2,9 +2,23 @@
 from ctypes import *
 import numpy as np
 from enum import Enum
-dll = cdll.LoadLibrary("./PlayerOneCamera.dll") # Windows, if your python is 64bit, please copy dll file from lib\x64 folder, if python is 32bit, copy dll file from lib\x86
-#dll = cdll.LoadLibrary("./libPlayerOneCamera.so") # Linux, please copy the 4 'so' files of the corresponding architecture, eg: if your Linux is arm64(aarch64) architecture, please copy the 4 'so' files from lib\arm64
-#dll = cdll.LoadLibrary("./libPlayerOneCamera.dylib") # Mac OS, please copy the 4 'dylib' files from 'lib' folder
+# RoboCam-Suite patch: resolve the library path relative to this file so it
+# loads correctly regardless of the current working directory.
+import os as _os, sys as _sys, pathlib as _pathlib
+_sdk_dir = _pathlib.Path(__file__).resolve().parent
+if _sys.platform == "win32":
+    # os.add_dll_directory() (Python >= 3.8) tells Windows to also search
+    # this folder when resolving DLL dependencies of PlayerOneCamera.dll.
+    if hasattr(_os, "add_dll_directory"):
+        _os.add_dll_directory(str(_sdk_dir))
+    _lib_name = "PlayerOneCamera.dll"
+elif _sys.platform == "darwin":
+    _lib_name = "libPlayerOneCamera.dylib"
+else:
+    _lib_name = "libPlayerOneCamera.so"
+_lib_path = str(_sdk_dir / _lib_name)
+dll = cdll.LoadLibrary(_lib_path)
+del _os, _sys, _pathlib, _sdk_dir, _lib_name, _lib_path
 
 
 #************************Type Define************************
