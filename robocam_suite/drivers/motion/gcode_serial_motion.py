@@ -243,11 +243,28 @@ class GCodeSerialMotionController(MotionController):
         self._sync_position()
 
     def _wait_for_movement_to_finish(self) -> None:
-        """Send M400 to block until all queued moves are complete."""
-        self._send_gcode(
-            "M400",
-            timeout=self._config.get("movement_wait_timeout", 30.0),
-        )
+        """
+        Block until all queued moves are complete.
+
+        Strategy: flush any stale bytes from the input buffer (temperature
+        reports, unsolicited status lines, etc.) then send M400.  If the
+        first attempt times out — which can happen when Marlin's output
+        buffer fills up and the 'ok' is delayed — flush again and retry
+        once before raising.
+        """
+        timeout = self._config.get("movement_wait_timeout", 30.0)
+        # Flush stale input so we don't mistake an old 'ok' for M400's ack
+        if self._serial_port:
+            self._serial_port.reset_input_buffer()
+        try:
+            self._send_gcode("M400", timeout=timeout)
+        except TimeoutError:
+            logger.warning(
+                "[MotionCtrl] M400 timed out — flushing buffer and retrying once."
+            )
+            if self._serial_port:
+                self._serial_port.reset_input_buffer()
+            self._send_gcode("M400", timeout=timeout)
 
     def _sync_position(self) -> None:
         """Update the cached position from the printer."""

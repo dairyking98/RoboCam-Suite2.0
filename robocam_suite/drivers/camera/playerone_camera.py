@@ -117,6 +117,11 @@ class PlayerOneCamera(Camera):
 
         self._poa = None                            # pyPOACamera module reference
 
+        # Lock so the live-preview thread and the experiment recording thread
+        # cannot call into the SDK simultaneously (the SDK is not thread-safe).
+        import threading
+        self._sdk_lock = threading.Lock()
+
         if self._simulate:
             logger.info("[PlayerOne] Running in SIMULATION MODE")
 
@@ -293,23 +298,32 @@ class PlayerOneCamera(Camera):
             # Auto-start capture on first read_frame call
             self.start_capture()
 
-        poa = self._poa
-
-        # Poll until a frame is ready (timeout ~100 ms)
-        deadline = time.monotonic() + 0.1
-        while time.monotonic() < deadline:
-            err, ready = poa.ImageReady(self._cam_id)
-            if err == poa.POAErrors.POA_OK and ready:
-                break
-            time.sleep(0.005)
-        else:
-            return None  # No frame within timeout
-
-        err = poa.GetImageData(self._cam_id, self._buf, 1000)
-        if err != poa.POAErrors.POA_OK:
+        # Acquire the SDK lock with a short timeout so the live-preview
+        # thread never blocks the experiment thread (or vice-versa) for
+        # more than ~50 ms.  If the lock is held, return None for this
+        # tick and the caller will try again next frame interval.
+        if not self._sdk_lock.acquire(timeout=0.05):
             return None
+        try:
+            poa = self._poa
 
-        frame = poa.ImageDataConvert(self._buf, self._height, self._width, self._img_format)
+            # Poll until a frame is ready (timeout ~100 ms)
+            deadline = time.monotonic() + 0.1
+            while time.monotonic() < deadline:
+                err, ready = poa.ImageReady(self._cam_id)
+                if err == poa.POAErrors.POA_OK and ready:
+                    break
+                time.sleep(0.005)
+            else:
+                return None  # No frame within timeout
+
+            err = poa.GetImageData(self._cam_id, self._buf, 1000)
+            if err != poa.POAErrors.POA_OK:
+                return None
+
+            frame = poa.ImageDataConvert(self._buf, self._height, self._width, self._img_format)
+        finally:
+            self._sdk_lock.release()
 
         # Ensure the frame is BGR uint8 for downstream compatibility
         if frame is None:
