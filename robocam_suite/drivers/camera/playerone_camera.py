@@ -180,7 +180,9 @@ class PlayerOneCamera(Camera):
             )
 
         logger.info(f"[PlayerOne] Calling GetCameraProperties({self._cam_index})")
-        props = poa.GetCameraProperties(self._cam_index)
+        err, props = poa.GetCameraProperties(self._cam_index)
+        if err != poa.POAErrors.POA_OK:
+            raise ConnectionError(f"[PlayerOne] GetCameraProperties failed: {err}")
         self._cam_id = props.cameraID
         model = props.cameraModelName.decode(errors="replace")
         logger.info(f"[PlayerOne] Connecting to {model!r} | cameraID={self._cam_id} | "
@@ -200,7 +202,7 @@ class PlayerOneCamera(Camera):
             poa.SetImageSize(self._cam_id, int(desired_w), int(desired_h)),
             "SetImageSize",
         )
-        _, self._width, self._height = poa.GetImageSize(self._cam_id)
+        _, self._width, self._height = poa.GetImageSize(self._cam_id)  # returns (err, w, h)
         logger.info(f"[PlayerOne] Actual image size: {self._width}x{self._height}")
 
         # Choose RAW8 if available, else first supported format
@@ -326,7 +328,7 @@ class PlayerOneCamera(Camera):
     def get_resolution(self) -> Tuple[int, int]:
         if self._simulate or not self.is_connected:
             return (self._width or 1920, self._height or 1080)
-        _, w, h = self._poa.GetImageSize(self._cam_id)
+        _, w, h = self._poa.GetImageSize(self._cam_id)  # returns (err, w, h)
         return (w, h)
 
     def set_resolution(self, resolution: Tuple[int, int]) -> None:
@@ -339,7 +341,7 @@ class PlayerOneCamera(Camera):
             if was_capturing:
                 self.stop_capture()
             self._check(self._poa.SetImageSize(self._cam_id, w, h), "SetImageSize")
-            _, self._width, self._height = self._poa.GetImageSize(self._cam_id)
+            _, self._width, self._height = self._poa.GetImageSize(self._cam_id)  # returns (err, w, h)
             # Re-allocate buffer
             bytes_per_pixel = 2 if self._img_format in (
                 self._poa.POAImgFormat.POA_RAW16, self._poa.POAImgFormat.POA_MONO16

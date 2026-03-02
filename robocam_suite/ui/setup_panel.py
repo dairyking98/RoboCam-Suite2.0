@@ -238,7 +238,10 @@ class _CameraEnumerator(QThread):
             count = poa.GetCameraCount()
             logger.info(f"[CameraEnum] PlayerOne camera count: {count}")
             for i in range(count):
-                props = poa.GetCameraProperties(i)
+                err, props = poa.GetCameraProperties(i)
+                if err != poa.POAErrors.POA_OK:
+                    logger.warning(f"[CameraEnum] GetCameraProperties({i}) failed: {err}")
+                    continue
                 model = props.cameraModelName.decode(errors="replace").strip()
                 label = f"PlayerOne — {model} (index {i})"
                 logger.info(f"[CameraEnum] Found PlayerOne camera: {label}")
