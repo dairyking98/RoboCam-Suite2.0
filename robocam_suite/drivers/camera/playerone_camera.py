@@ -265,37 +265,40 @@ class PlayerOneCamera(Camera):
             return
         if not self.is_connected:
             raise RuntimeError("[PlayerOne] Cannot start capture: camera not connected.")
-        if self._capturing:
-            return
-        # StopExposure first — InitCamera can leave an exposure in progress
-        # which would cause StartExposure to return POA_ERROR_EXPOSING.
-        try:
-            self._poa.StopExposure(self._cam_id)
-        except Exception:
-            pass
-        # False = video mode (continuous)
-        self._check(self._poa.StartExposure(self._cam_id, False), "StartExposure (video)")
-        self._capturing = True
-        logger.debug("[PlayerOne] Video capture started.")
+        with self._sdk_lock:
+            if self._capturing:
+                return
+            # StopExposure first — InitCamera can leave an exposure in progress
+            # which would cause StartExposure to return POA_ERROR_EXPOSING.
+            try:
+                self._poa.StopExposure(self._cam_id)
+            except Exception:
+                pass
+            # False = video mode (continuous)
+            self._check(self._poa.StartExposure(self._cam_id, False), "StartExposure (video)")
+            self._capturing = True
+            logger.info("[PlayerOne] Video capture started.")
 
     def stop_capture(self) -> None:
         if self._simulate:
             self._capturing = False
             return
-        if self._capturing and self._cam_id is not None:
-            try:
-                self._poa.StopExposure(self._cam_id)
-            except Exception as e:
-                logger.warning(f"[PlayerOne] StopExposure error (ignored): {e}")
-            self._capturing = False
-            logger.debug("[PlayerOne] Video capture stopped.")
+        with self._sdk_lock:
+            if self._capturing and self._cam_id is not None:
+                try:
+                    self._poa.StopExposure(self._cam_id)
+                except Exception as e:
+                    logger.warning(f"[PlayerOne] StopExposure error (ignored): {e}")
+                self._capturing = False
+                logger.info("[PlayerOne] Video capture stopped.")
 
     def read_frame(self) -> Optional[np.ndarray]:
         if self._simulate:
             return np.zeros((self._height, self._width, 3), dtype=np.uint8)
 
+        # Auto-start capture on first read_frame call.
+        # start_capture() is idempotent and acquires _sdk_lock internally.
         if not self._capturing:
-            # Auto-start capture on first read_frame call
             self.start_capture()
 
         # Acquire the SDK lock with a short timeout so the live-preview
