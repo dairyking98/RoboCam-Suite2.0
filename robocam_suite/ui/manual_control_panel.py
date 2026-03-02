@@ -1,4 +1,10 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QGridLayout, QLabel, QGroupBox
+"""
+Manual Control Panel — direct hardware control outside of an experiment.
+"""
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QGridLayout, QLabel, QGroupBox,
+)
 from PySide6.QtCore import Qt, QTimer
 from robocam_suite.hw_manager import hw_manager
 
@@ -10,107 +16,142 @@ class ManualControlPanel(QWidget):
         super().__init__(parent)
         self.hw_manager = hw_manager
 
-        self.layout = QVBoxLayout(self)
+        root = QVBoxLayout(self)
+        root.setSpacing(8)
 
-        # General Controls
-        general_group = QGroupBox("General Controls")
-        general_layout = QHBoxLayout()
-        general_group.setLayout(general_layout)
-        self.layout.addWidget(general_group)
+        root.addWidget(self._build_general_group())
+        root.addWidget(self._build_laser_group())
+        root.addWidget(self._build_status_group())
+        root.addStretch()
+
+        # Status refresh every second
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._refresh_status)
+        self._timer.start(1000)
+        self._refresh_status()
+
+    # ------------------------------------------------------------------
+    # Group builders
+    # ------------------------------------------------------------------
+
+    def _build_general_group(self) -> QGroupBox:
+        grp = QGroupBox("General Controls")
+        layout = QHBoxLayout(grp)
 
         self.home_all_btn = QPushButton("Home All Axes")
-        general_layout.addWidget(self.home_all_btn)
+        self.home_all_btn.setToolTip(
+            "Send G28 to the printer, homing all axes (X, Y, Z) to their endstops."
+        )
+        self.home_all_btn.clicked.connect(self._home_all)
+        layout.addWidget(self.home_all_btn)
 
-        # Laser Control
-        laser_group = QGroupBox("Laser Control")
-        laser_layout = QVBoxLayout()
-        laser_group.setLayout(laser_layout)
-        self.layout.addWidget(laser_group)
+        self.disable_steppers_btn = QPushButton("Disable Steppers")
+        self.disable_steppers_btn.setToolTip(
+            "Send M84 to the printer, cutting power to all stepper motors.\n"
+            "This lets you move the axes by hand without fighting the motors.\n"
+            "The printer will need to be re-homed before the next move."
+        )
+        self.disable_steppers_btn.clicked.connect(self._disable_steppers)
+        layout.addWidget(self.disable_steppers_btn)
+
+        return grp
+
+    def _build_laser_group(self) -> QGroupBox:
+        grp = QGroupBox("Laser Control")
+        layout = QVBoxLayout(grp)
 
         gpio_enabled = self.hw_manager.gpio_enabled
         if not gpio_enabled:
-            self.gpio_notice_label = QLabel(
-                "GPIO is disabled (gpio_controller.enabled = false in config).\n"
-                "Laser controls are unavailable. Enable GPIO in the config file to use them."
+            notice = QLabel(
+                "GPIO is disabled — enable it in the Setup tab to use laser controls."
             )
-            self.gpio_notice_label.setStyleSheet("color: orange;")
-            self.gpio_notice_label.setWordWrap(True)
-            laser_layout.addWidget(self.gpio_notice_label)
+            notice.setStyleSheet("color: orange;")
+            notice.setWordWrap(True)
+            layout.addWidget(notice)
 
         btn_row = QHBoxLayout()
         self.laser_on_btn = QPushButton("Laser ON")
+        self.laser_on_btn.setToolTip("Turn the laser on (sets the configured laser pin HIGH).")
         self.laser_off_btn = QPushButton("Laser OFF")
+        self.laser_off_btn.setToolTip("Turn the laser off (sets the configured laser pin LOW).")
         self.laser_on_btn.setEnabled(gpio_enabled)
         self.laser_off_btn.setEnabled(gpio_enabled)
+        self.laser_on_btn.clicked.connect(lambda: self._set_laser(True))
+        self.laser_off_btn.clicked.connect(lambda: self._set_laser(False))
         btn_row.addWidget(self.laser_on_btn)
         btn_row.addWidget(self.laser_off_btn)
-        laser_layout.addLayout(btn_row)
+        layout.addLayout(btn_row)
 
-        # Hardware Status
-        status_group = QGroupBox("Hardware Status")
-        status_layout = QGridLayout()
-        status_group.setLayout(status_layout)
-        self.layout.addWidget(status_group)
+        return grp
 
-        status_layout.addWidget(QLabel("Motion Controller:"), 0, 0)
+    def _build_status_group(self) -> QGroupBox:
+        grp = QGroupBox("Hardware Status")
+        layout = QGridLayout(grp)
+
+        layout.addWidget(QLabel("3-D Printer:"), 0, 0)
         self.mc_status_label = QLabel("Disconnected")
-        status_layout.addWidget(self.mc_status_label, 0, 1)
+        layout.addWidget(self.mc_status_label, 0, 1)
 
-        status_layout.addWidget(QLabel("Camera:"), 1, 0)
+        layout.addWidget(QLabel("Camera:"), 1, 0)
         self.cam_status_label = QLabel("Disconnected")
-        status_layout.addWidget(self.cam_status_label, 1, 1)
+        layout.addWidget(self.cam_status_label, 1, 1)
 
-        status_layout.addWidget(QLabel("GPIO Controller:"), 2, 0)
+        layout.addWidget(QLabel("GPIO / Arduino:"), 2, 0)
+        gpio_enabled = self.hw_manager.gpio_enabled
         self.gpio_status_label = QLabel("Disabled" if not gpio_enabled else "Disconnected")
         self.gpio_status_label.setStyleSheet("color: gray" if not gpio_enabled else "color: red")
-        status_layout.addWidget(self.gpio_status_label, 2, 1)
+        layout.addWidget(self.gpio_status_label, 2, 1)
 
-        self.layout.addStretch()
+        return grp
 
-        # Connect signals
-        self.home_all_btn.clicked.connect(self.home_all)
-        self.laser_on_btn.clicked.connect(lambda: self.set_laser(True))
-        self.laser_off_btn.clicked.connect(lambda: self.set_laser(False))
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
 
-        # Status update timer — only poll connection status for enabled devices
-        self.status_timer = QTimer(self)
-        self.status_timer.timeout.connect(self.update_status)
-        self.status_timer.start(1000)
-        self.update_status()
-
-    def home_all(self):
+    def _home_all(self):
         try:
             self.hw_manager.get_motion_controller().home()
         except Exception as e:
-            print(f"Error homing: {e}")
+            print(f"[ManualControl] Home error: {e}")
 
-    def set_laser(self, state: bool):
+    def _disable_steppers(self):
+        try:
+            mc = self.hw_manager.get_motion_controller()
+            # M84 is the standard G-code command to disable stepper motors
+            mc.send_raw("M84")
+        except Exception as e:
+            print(f"[ManualControl] Disable steppers error: {e}")
+
+    def _set_laser(self, state: bool):
         try:
             laser_pin = self.hw_manager._config.get_section("gpio_controller").get("laser_pin", 21)
             self.hw_manager.get_gpio_controller().write_pin(laser_pin, state)
         except Exception as e:
-            print(f"Error controlling laser: {e}")
+            print(f"[ManualControl] Laser error: {e}")
 
-    def update_status(self):
+    # ------------------------------------------------------------------
+    # Status refresh
+    # ------------------------------------------------------------------
+
+    def _refresh_status(self):
         try:
-            mc_connected = self.hw_manager.get_motion_controller().is_connected
-            self.mc_status_label.setText("Connected" if mc_connected else "Disconnected")
-            self.mc_status_label.setStyleSheet("color: green" if mc_connected else "color: red")
+            ok = self.hw_manager.get_motion_controller().is_connected
+            self.mc_status_label.setText("Connected" if ok else "Disconnected")
+            self.mc_status_label.setStyleSheet("color: green" if ok else "color: red")
         except Exception:
             pass
 
         try:
-            cam_connected = self.hw_manager.get_camera().is_connected
-            self.cam_status_label.setText("Connected" if cam_connected else "Disconnected")
-            self.cam_status_label.setStyleSheet("color: green" if cam_connected else "color: red")
+            ok = self.hw_manager.get_camera().is_connected
+            self.cam_status_label.setText("Connected" if ok else "Disconnected")
+            self.cam_status_label.setStyleSheet("color: green" if ok else "color: red")
         except Exception:
             pass
 
-        # Only update GPIO status if it is enabled; otherwise leave it as "Disabled"
         if self.hw_manager.gpio_enabled:
             try:
-                gpio_connected = self.hw_manager.get_gpio_controller().is_connected
-                self.gpio_status_label.setText("Connected" if gpio_connected else "Disconnected")
-                self.gpio_status_label.setStyleSheet("color: green" if gpio_connected else "color: red")
+                ok = self.hw_manager.get_gpio_controller().is_connected
+                self.gpio_status_label.setText("Connected" if ok else "Disconnected")
+                self.gpio_status_label.setStyleSheet("color: green" if ok else "color: red")
             except Exception:
                 pass
