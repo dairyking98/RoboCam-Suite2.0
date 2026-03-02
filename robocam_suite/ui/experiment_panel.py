@@ -1,12 +1,16 @@
 """
 Experiment Panel — configure, select wells, and run well-plate imaging experiments.
 
-Features:
-  - Inline help text explaining every parameter.
-  - Interactive well-selection grid (click to toggle, Shift-click for range,
-    Check All / Uncheck All buttons).
-  - All values are auto-saved on change and restored on next launch.
-  - Named presets can be saved and recalled for different experimental setups.
+Well Selection behaviour
+------------------------
+- The grid is populated from the calibration panel's current rows/cols.
+- A "Sync from Calibration" button refreshes the grid if the calibration
+  has changed since the panel was opened.
+- Click            : toggle a single well.
+- Shift + Click    : select/deselect a rectangular range from the last
+                     clicked well to this one.
+- Ctrl  + Click    : toggle a single well without clearing the range anchor
+                     (additive individual toggle).
 """
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QGridLayout, QLabel, QLineEdit, QGroupBox, QSpinBox,
     QComboBox, QInputDialog, QMessageBox, QScrollArea,
-    QSizePolicy,
+    QApplication,
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QColor
@@ -27,7 +31,6 @@ from robocam_suite.logger import setup_logger
 
 logger = setup_logger()
 
-# Corner order expected by WellPlate
 CORNER_NAMES = ["Upper-Left", "Lower-Left", "Upper-Right", "Lower-Right"]
 
 
@@ -36,7 +39,6 @@ CORNER_NAMES = ["Upper-Left", "Lower-Left", "Upper-Right", "Lower-Right"]
 # ---------------------------------------------------------------------------
 
 class ExperimentRunner(QThread):
-    """Runs an Experiment in a background thread so the GUI stays responsive."""
     progress = Signal(str)
     finished = Signal()
 
@@ -57,8 +59,6 @@ class ExperimentRunner(QThread):
 # ---------------------------------------------------------------------------
 
 class _WellButton(QPushButton):
-    """A small toggle button representing a single well in the selection grid."""
-
     SELECTED_STYLE = (
         "background-color: #2a7ae2; color: white; border: 1px solid #1a5ab2; "
         "border-radius: 3px; font-size: 9px; padding: 1px;"
@@ -72,13 +72,6 @@ class _WellButton(QPushButton):
         super().__init__(label, parent)
         self._selected = True
         self.setFixedSize(36, 24)
-        self.setCheckable(True)
-        self.setChecked(True)
-        self._apply_style()
-        self.toggled.connect(self._on_toggled)
-
-    def _on_toggled(self, checked: bool):
-        self._selected = checked
         self._apply_style()
 
     def _apply_style(self):
@@ -90,8 +83,11 @@ class _WellButton(QPushButton):
     def is_selected(self) -> bool:
         return self._selected
 
-    def set_selected(self, value: bool):
-        self.setChecked(value)
+    def set_selected(self, value: bool, *, _emit: bool = True):
+        if self._selected == value:
+            return
+        self._selected = value
+        self._apply_style()
 
 
 # ---------------------------------------------------------------------------
@@ -100,13 +96,12 @@ class _WellButton(QPushButton):
 
 class WellSelectionWidget(QGroupBox):
     """
-    An interactive grid of toggle buttons, one per well.
+    Interactive grid of toggle buttons, one per well.
 
-    Supports:
-    - Click to toggle individual wells.
-    - Shift-click to select a rectangular range.
-    - Check All / Uncheck All buttons.
-    - Rebuilds automatically when rows/cols change.
+    Keyboard modifiers (checked at click time via QApplication):
+    - Shift + Click  : rectangular range select/deselect from last anchor.
+    - Ctrl  + Click  : additive individual toggle (does not move anchor).
+    - Plain Click    : toggle single well and set as new anchor.
     """
 
     def __init__(self, parent=None):
@@ -114,18 +109,20 @@ class WellSelectionWidget(QGroupBox):
         self.setToolTip(
             "Click a well to toggle it on/off.\n"
             "Shift-click to select a rectangular range.\n"
-            "Only selected wells (blue) will be visited during the experiment."
+            "Ctrl-click to toggle individual wells additively.\n"
+            "Only selected (blue) wells will be visited during the experiment."
         )
         self._rows = 8
         self._cols = 12
         self._buttons: dict[tuple[int, int], _WellButton] = {}
-        self._last_clicked: tuple[int, int] | None = None
+        self._anchor: tuple[int, int] | None = None   # last plain-click position
 
         outer = QVBoxLayout(self)
         outer.setSpacing(4)
 
         # Toolbar
         toolbar = QHBoxLayout()
+
         check_all_btn = QPushButton("Check All")
         check_all_btn.setToolTip("Select all wells.")
         check_all_btn.clicked.connect(self.check_all)
@@ -158,6 +155,10 @@ class WellSelectionWidget(QGroupBox):
 
         self._rebuild_grid()
 
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def rebuild(self, rows: int, cols: int):
         """Rebuild the grid for a new well-plate size, preserving selection where possible."""
         old_selection: dict[tuple[int, int], bool] = {
@@ -165,72 +166,8 @@ class WellSelectionWidget(QGroupBox):
         }
         self._rows = rows
         self._cols = cols
+        self._anchor = None
         self._rebuild_grid(old_selection)
-
-    def _rebuild_grid(self, old_selection: dict | None = None):
-        # Clear existing buttons
-        for btn in self._buttons.values():
-            btn.deleteLater()
-        self._buttons.clear()
-        self._last_clicked = None
-
-        # Remove all items from layout
-        while self._grid_layout.count():
-            item = self._grid_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        # Column headers (A, B, C …)
-        for col in range(self._cols):
-            lbl = QLabel(str(col + 1))
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet("font-size: 9px; color: gray;")
-            self._grid_layout.addWidget(lbl, 0, col + 1)
-
-        # Row headers + buttons
-        for row in range(self._rows):
-            row_letter = chr(ord("A") + row)
-            hdr = QLabel(row_letter)
-            hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hdr.setStyleSheet("font-size: 9px; color: gray;")
-            self._grid_layout.addWidget(hdr, row + 1, 0)
-
-            for col in range(self._cols):
-                label = f"{row_letter}{col + 1}"
-                btn = _WellButton(label)
-                # Restore previous selection if available
-                if old_selection is not None:
-                    btn.set_selected(old_selection.get((row, col), True))
-                btn.clicked.connect(
-                    lambda checked, r=row, c=col: self._on_well_clicked(r, c)
-                )
-                self._grid_layout.addWidget(btn, row + 1, col + 1)
-                self._buttons[(row, col)] = btn
-
-        self._update_count()
-
-    def _on_well_clicked(self, row: int, col: int):
-        modifiers = Qt.KeyboardModifier
-        app_mods = __import__("PySide6.QtWidgets", fromlist=["QApplication"]).QApplication.keyboardModifiers()
-        btn = self._buttons[(row, col)]
-
-        if app_mods & Qt.KeyboardModifier.ShiftModifier and self._last_clicked is not None:
-            # Range select: toggle all wells in the bounding rectangle
-            r0, c0 = self._last_clicked
-            r1, c1 = row, col
-            target_state = btn.is_selected
-            for r in range(min(r0, r1), max(r0, r1) + 1):
-                for c in range(min(c0, c1), max(c0, c1) + 1):
-                    self._buttons[(r, c)].set_selected(target_state)
-        else:
-            self._last_clicked = (row, col)
-
-        self._update_count()
-
-    def _update_count(self):
-        total = len(self._buttons)
-        selected = sum(1 for b in self._buttons.values() if b.is_selected)
-        self._count_label.setText(f"{selected}/{total} wells selected")
 
     def check_all(self):
         for btn in self._buttons.values():
@@ -248,10 +185,7 @@ class WellSelectionWidget(QGroupBox):
         self._update_count()
 
     def get_selected_indices(self) -> list[int]:
-        """
-        Return a flat list of well indices (0-based, row-major order)
-        that are currently selected.
-        """
+        """Return flat 0-based (row-major) indices of selected wells."""
         indices = []
         idx = 0
         for row in range(self._rows):
@@ -262,7 +196,6 @@ class WellSelectionWidget(QGroupBox):
         return indices
 
     def get_selected_labels(self) -> list[str]:
-        """Return the labels of all selected wells (e.g. ['A1', 'A2', 'B3'])."""
         labels = []
         for row in range(self._rows):
             for col in range(self._cols):
@@ -270,6 +203,88 @@ class WellSelectionWidget(QGroupBox):
                 if btn.is_selected:
                     labels.append(btn.text())
         return labels
+
+    # ------------------------------------------------------------------
+    # Internal grid construction
+    # ------------------------------------------------------------------
+
+    def _rebuild_grid(self, old_selection: dict | None = None):
+        for btn in self._buttons.values():
+            btn.deleteLater()
+        self._buttons.clear()
+
+        while self._grid_layout.count():
+            item = self._grid_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Column headers
+        for col in range(self._cols):
+            lbl = QLabel(str(col + 1))
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("font-size: 9px; color: gray;")
+            self._grid_layout.addWidget(lbl, 0, col + 1)
+
+        # Row headers + buttons
+        for row in range(self._rows):
+            row_letter = chr(ord("A") + row)
+            hdr = QLabel(row_letter)
+            hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            hdr.setStyleSheet("font-size: 9px; color: gray;")
+            self._grid_layout.addWidget(hdr, row + 1, 0)
+
+            for col in range(self._cols):
+                label = f"{row_letter}{col + 1}"
+                btn = _WellButton(label)
+                if old_selection is not None:
+                    btn.set_selected(old_selection.get((row, col), True))
+                # Use a raw mousePressEvent override via lambda capture
+                btn.clicked.connect(
+                    lambda checked=False, r=row, c=col: self._on_well_clicked(r, c)
+                )
+                self._grid_layout.addWidget(btn, row + 1, col + 1)
+                self._buttons[(row, col)] = btn
+
+        self._update_count()
+
+    # ------------------------------------------------------------------
+    # Click handling
+    # ------------------------------------------------------------------
+
+    def _on_well_clicked(self, row: int, col: int):
+        mods = QApplication.keyboardModifiers()
+        shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+        ctrl  = bool(mods & Qt.KeyboardModifier.ControlModifier)
+        btn   = self._buttons[(row, col)]
+
+        if shift and self._anchor is not None:
+            # ---- Shift-click: rectangular range ----
+            r0, c0 = self._anchor
+            r1, c1 = row, col
+            # The target state is the OPPOSITE of the anchor well's current state
+            # so that shift-clicking into an unselected area selects, and vice-versa.
+            target = not self._buttons[self._anchor].is_selected
+            for r in range(min(r0, r1), max(r0, r1) + 1):
+                for c in range(min(c0, c1), max(c0, c1) + 1):
+                    self._buttons[(r, c)].set_selected(target)
+            # Do NOT move the anchor on shift-click
+
+        elif ctrl:
+            # ---- Ctrl-click: additive individual toggle ----
+            btn.set_selected(not btn.is_selected)
+            # Do NOT move the anchor on ctrl-click
+
+        else:
+            # ---- Plain click: toggle and set anchor ----
+            btn.set_selected(not btn.is_selected)
+            self._anchor = (row, col)
+
+        self._update_count()
+
+    def _update_count(self):
+        total = len(self._buttons)
+        selected = sum(1 for b in self._buttons.values() if b.is_selected)
+        self._count_label.setText(f"{selected}/{total} wells selected")
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +342,6 @@ class ExperimentPanel(QWidget):
         layout = QGridLayout(grp)
         layout.setColumnStretch(1, 1)
 
-        # Experiment name
         layout.addWidget(QLabel("Experiment Name:"), 0, 0)
         self.exp_name_input = QLineEdit("my_experiment")
         self.exp_name_input.setToolTip(
@@ -342,15 +356,15 @@ class ExperimentPanel(QWidget):
         )
         layout.addWidget(name_help, 0, 2)
 
-        # Well plate dimensions
+        # Well plate dimensions (read-only display; source of truth is calibration panel)
         layout.addWidget(QLabel("Well Plate Columns:"), 1, 0)
         self.width_spinbox = QSpinBox()
         self.width_spinbox.setRange(1, 48)
         self.width_spinbox.setValue(12)
         self.width_spinbox.setToolTip(
-            "Number of columns (horizontal wells) in the well plate.\n"
-            "Standard plates: 6-well=3 cols, 12-well=4 cols, 24-well=6 cols,\n"
-            "48-well=8 cols, 96-well=12 cols."
+            "Number of columns in the well plate.\n"
+            "This is synced from the Calibration tab.\n"
+            "Standard: 96-well=12, 48-well=8, 24-well=6, 12-well=4, 6-well=3."
         )
         layout.addWidget(self.width_spinbox, 1, 1)
         w_help = QLabel("?")
@@ -363,9 +377,9 @@ class ExperimentPanel(QWidget):
         self.depth_spinbox.setRange(1, 48)
         self.depth_spinbox.setValue(8)
         self.depth_spinbox.setToolTip(
-            "Number of rows (vertical wells) in the well plate.\n"
-            "Standard plates: 6-well=2 rows, 12-well=3 rows, 24-well=4 rows,\n"
-            "48-well=6 rows, 96-well=8 rows."
+            "Number of rows in the well plate.\n"
+            "This is synced from the Calibration tab.\n"
+            "Standard: 96-well=8, 48-well=6, 24-well=4, 12-well=3, 6-well=2."
         )
         layout.addWidget(self.depth_spinbox, 2, 1)
         d_help = QLabel("?")
@@ -373,13 +387,12 @@ class ExperimentPanel(QWidget):
         d_help.setStyleSheet("color: white; background: #555; border-radius: 8px; padding: 1px 5px; font-weight: bold;")
         layout.addWidget(d_help, 2, 2)
 
-        # Timing parameters
         self.param_inputs: dict[str, QLineEdit] = {}
         timing_params = [
             ("pre_laser_delay", "0.5",
              "Pre-Laser Delay (s):",
              "Seconds to wait after arriving at a well before turning the laser on.\n"
-             "Allows any vibration from movement to settle before imaging."),
+             "Allows vibration from movement to settle before imaging."),
             ("laser_on_duration", "1.0",
              "Laser On Duration (s):",
              "How long the laser stays on per well (in seconds).\n"
@@ -398,7 +411,6 @@ class ExperimentPanel(QWidget):
             self.param_inputs[key] = edit
             edit.textChanged.connect(self._autosave)
 
-        # Autosave connections
         self.exp_name_input.textChanged.connect(self._autosave)
         self.width_spinbox.valueChanged.connect(self._on_dimensions_changed)
         self.depth_spinbox.valueChanged.connect(self._on_dimensions_changed)
@@ -406,9 +418,22 @@ class ExperimentPanel(QWidget):
         return grp
 
     def _build_well_selection_group(self) -> QWidget:
-        """Build the well-selection widget and wire it to the dimension spinboxes."""
         self.well_selection = WellSelectionWidget()
-        return self.well_selection
+
+        # Sync button — pulls rows/cols from the calibration panel
+        sync_btn = QPushButton("Sync from Calibration")
+        sync_btn.setToolTip(
+            "Load the well-plate dimensions from the Calibration tab\n"
+            "and rebuild this selection grid to match."
+        )
+        sync_btn.clicked.connect(self._sync_from_calibration)
+
+        container = QWidget()
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.addWidget(sync_btn)
+        vbox.addWidget(self.well_selection)
+        return container
 
     def _build_presets_group(self) -> QGroupBox:
         grp = QGroupBox("Presets")
@@ -467,8 +492,23 @@ class ExperimentPanel(QWidget):
         return grp
 
     # ------------------------------------------------------------------
-    # Dimension change handler
+    # Calibration sync
     # ------------------------------------------------------------------
+
+    def _sync_from_calibration(self):
+        """Pull rows/cols from the calibration panel and rebuild the well grid."""
+        if self.calibration_panel is None:
+            return
+        cols, rows = self.calibration_panel.get_well_dimensions()
+        # Block signals to avoid double-rebuild
+        self.width_spinbox.blockSignals(True)
+        self.depth_spinbox.blockSignals(True)
+        self.width_spinbox.setValue(cols)
+        self.depth_spinbox.setValue(rows)
+        self.width_spinbox.blockSignals(False)
+        self.depth_spinbox.blockSignals(False)
+        self.well_selection.rebuild(rows, cols)
+        logger.info(f"[Experiment] Synced well grid from calibration: {rows}×{cols}")
 
     def _on_dimensions_changed(self):
         rows = self.depth_spinbox.value()
@@ -599,7 +639,6 @@ class ExperimentPanel(QWidget):
     def _load_from_session(self):
         s = self._session.get_session("experiment")
         self._apply_values(s)
-        # Rebuild the well grid to match restored dimensions
         self.well_selection.rebuild(
             self.depth_spinbox.value(),
             self.width_spinbox.value(),
