@@ -57,9 +57,18 @@ def _ensure_poa_path() -> None:
     # Project root is therefore three levels up.
     project_root = Path(__file__).resolve().parent.parent.parent
     vendor_dir = project_root / "vendor" / "playerone"
-    if vendor_dir.is_dir() and str(vendor_dir) not in sys.path:
-        sys.path.insert(0, str(vendor_dir))
-        logger.debug(f"[PlayerOne] SDK path added: {vendor_dir}")
+    logger.info(f"[PlayerOne] vendor dir: {vendor_dir} | exists={vendor_dir.is_dir()}")
+    if vendor_dir.is_dir():
+        # List files so we can confirm DLL/so is present
+        files = [f.name for f in vendor_dir.iterdir()]
+        logger.info(f"[PlayerOne] vendor dir contents: {files}")
+        if str(vendor_dir) not in sys.path:
+            sys.path.insert(0, str(vendor_dir))
+            logger.info(f"[PlayerOne] SDK path added to sys.path: {vendor_dir}")
+        else:
+            logger.info(f"[PlayerOne] SDK path already in sys.path: {vendor_dir}")
+    else:
+        logger.warning(f"[PlayerOne] vendor dir not found — SDK not installed. Run: python scripts/install_playerone_sdk.py")
 
 
 # ---------------------------------------------------------------------------
@@ -220,19 +229,24 @@ class _CameraEnumerator(QThread):
         # --- Player One Astronomy cameras (via pyPOACamera SDK) ---
         # The SDK ships as vendor/playerone/pyPOACamera.py + PlayerOneCamera.dll.
         # _ensure_poa_path() adds that directory to sys.path so the import works.
+        logger.info("[CameraEnum] Starting Player One SDK probe...")
         try:
             _ensure_poa_path()
+            logger.info("[CameraEnum] Attempting: import pyPOACamera")
             import pyPOACamera as poa  # type: ignore
+            logger.info("[CameraEnum] pyPOACamera imported successfully")
             count = poa.GetCameraCount()
+            logger.info(f"[CameraEnum] PlayerOne camera count: {count}")
             for i in range(count):
                 props = poa.GetCameraProperties(i)
                 model = props.cameraModelName.decode(errors="replace").strip()
                 label = f"PlayerOne — {model} (index {i})"
+                logger.info(f"[CameraEnum] Found PlayerOne camera: {label}")
                 devices.append((label, "playerone", i))
-        except ImportError:
-            pass  # SDK not installed — silently skip
+        except ImportError as e:
+            logger.warning(f"[CameraEnum] pyPOACamera import failed (SDK not installed or DLL missing): {e}")
         except Exception as e:
-            logger.debug(f"[CameraEnum] PlayerOne probe failed: {e}")
+            logger.error(f"[CameraEnum] PlayerOne probe failed: {e}", exc_info=True)
 
         # --- Windows Imaging Devices (WIA class: microscopes, scientific cameras) ---
         # WMI lists devices like the POA MARS 662M under PNPClass="Image" even

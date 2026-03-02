@@ -54,11 +54,19 @@ def _ensure_sdk_on_path() -> bool:
     here = Path(__file__).resolve()
     project_root = here.parent.parent.parent.parent  # robocam_suite/drivers/camera/ -> project root
     vendor_dir = project_root / "vendor" / "playerone"
-    if vendor_dir.is_dir() and str(vendor_dir) not in sys.path:
-        sys.path.insert(0, str(vendor_dir))
-        logger.debug(f"[PlayerOne] Added SDK path: {vendor_dir}")
+    logger.info(f"[PlayerOne] _ensure_sdk_on_path: vendor_dir={vendor_dir} exists={vendor_dir.is_dir()}")
+    if vendor_dir.is_dir():
+        files = [f.name for f in vendor_dir.iterdir()]
+        logger.info(f"[PlayerOne] vendor dir contents: {files}")
+        if str(vendor_dir) not in sys.path:
+            sys.path.insert(0, str(vendor_dir))
+            logger.info(f"[PlayerOne] Added SDK path to sys.path: {vendor_dir}")
+        else:
+            logger.info(f"[PlayerOne] SDK path already in sys.path")
         return True
-    return vendor_dir.is_dir()
+    else:
+        logger.warning(f"[PlayerOne] vendor dir not found — run: python scripts/install_playerone_sdk.py")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -118,9 +126,21 @@ class PlayerOneCamera(Camera):
 
     def _load_sdk(self):
         """Import pyPOACamera, adding the vendor directory to sys.path first."""
-        _ensure_sdk_on_path()
-        import pyPOACamera as poa  # type: ignore
-        self._poa = poa
+        logger.info("[PlayerOne] _load_sdk: calling _ensure_sdk_on_path()")
+        found = _ensure_sdk_on_path()
+        if not found:
+            raise ImportError("[PlayerOne] vendor/playerone/ directory not found. Run: python scripts/install_playerone_sdk.py")
+        logger.info("[PlayerOne] _load_sdk: attempting import pyPOACamera")
+        try:
+            import pyPOACamera as poa  # type: ignore
+            logger.info("[PlayerOne] _load_sdk: pyPOACamera imported OK")
+            self._poa = poa
+        except ImportError as e:
+            logger.error(f"[PlayerOne] _load_sdk: import pyPOACamera failed: {e}")
+            raise
+        except OSError as e:
+            logger.error(f"[PlayerOne] _load_sdk: DLL load failed (OSError): {e}")
+            raise
 
     def _check(self, err, operation: str):
         """Raise RuntimeError if the SDK returned a non-OK error code."""
@@ -144,10 +164,13 @@ class PlayerOneCamera(Camera):
         if self.is_connected:
             return
 
+        logger.info(f"[PlayerOne] connect(): cam_index={self._cam_index} config={self._config}")
         self._load_sdk()
         poa = self._poa
 
+        logger.info("[PlayerOne] Calling GetCameraCount()")
         count = poa.GetCameraCount()
+        logger.info(f"[PlayerOne] GetCameraCount() = {count}")
         if count == 0:
             raise ConnectionError("[PlayerOne] No Player One cameras detected.")
         if self._cam_index >= count:
@@ -156,30 +179,39 @@ class PlayerOneCamera(Camera):
                 f"(only {count} camera(s) found)."
             )
 
+        logger.info(f"[PlayerOne] Calling GetCameraProperties({self._cam_index})")
         props = poa.GetCameraProperties(self._cam_index)
         self._cam_id = props.cameraID
         model = props.cameraModelName.decode(errors="replace")
-        logger.info(f"[PlayerOne] Connecting to {model} (SDK ID {self._cam_id})")
+        logger.info(f"[PlayerOne] Connecting to {model!r} | cameraID={self._cam_id} | "
+                    f"maxRes={props.maxWidth}x{props.maxHeight} | bitDepth={props.bitDepth}")
 
+        logger.info(f"[PlayerOne] Calling OpenCamera({self._cam_id})")
         self._check(poa.OpenCamera(self._cam_id), "OpenCamera")
+        logger.info(f"[PlayerOne] Calling InitCamera({self._cam_id})")
         self._check(poa.InitCamera(self._cam_id), "InitCamera")
         self._opened = True
+        logger.info("[PlayerOne] Camera opened and initialised")
 
         # Apply resolution from config
         desired_w, desired_h = self._config.get("resolution", [props.maxWidth, props.maxHeight])
+        logger.info(f"[PlayerOne] Setting image size: {desired_w}x{desired_h}")
         self._check(
             poa.SetImageSize(self._cam_id, int(desired_w), int(desired_h)),
             "SetImageSize",
         )
         _, self._width, self._height = poa.GetImageSize(self._cam_id)
+        logger.info(f"[PlayerOne] Actual image size: {self._width}x{self._height}")
 
         # Choose RAW8 if available, else first supported format
         supported_fmts = props.imgFormats
+        logger.info(f"[PlayerOne] Supported image formats: {supported_fmts}")
         preferred = [poa.POAImgFormat.POA_RAW8, poa.POAImgFormat.POA_MONO8]
         self._img_format = next(
             (f for f in preferred if f in supported_fmts),
             supported_fmts[0] if supported_fmts else poa.POAImgFormat.POA_RAW8,
         )
+        logger.info(f"[PlayerOne] Selected image format: {self._img_format}")
         self._check(
             poa.SetImageFormat(self._cam_id, self._img_format),
             "SetImageFormat",
@@ -188,6 +220,7 @@ class PlayerOneCamera(Camera):
         # Apply exposure and gain from config
         exp_us = int(self._config.get("exposure_us", 20_000))
         gain = int(self._config.get("gain", 100))
+        logger.info(f"[PlayerOne] Setting exposure={exp_us}us gain={gain}")
         poa.SetExp(self._cam_id, exp_us, False)
         poa.SetGain(self._cam_id, gain, False)
 
