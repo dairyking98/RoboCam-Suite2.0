@@ -30,7 +30,9 @@ class MainWindow(QMainWindow):
         from robocam_suite.ui.calibration_panel import CalibrationPanel
         self.calibration_panel = CalibrationPanel()
         self.tabs.addTab(self.calibration_panel, "Calibration")
-        self.tabs.addTab(QWidget(), "Experiment")
+        from robocam_suite.ui.experiment_panel import ExperimentPanel
+        self.experiment_panel = ExperimentPanel(calibration_panel=self.calibration_panel)
+        self.tabs.addTab(self.experiment_panel, "Experiment")
         self.tabs.addTab(QWidget(), "Manual Control")
 
         # Set up camera update timer
