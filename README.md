@@ -37,6 +37,7 @@ This project uses a Python virtual environment to manage its dependencies. Run t
   ```cmd
   setup.bat
   ```
+  This installs the core dependencies **plus** the Windows camera extras (`cv2-enumerate-cameras` and `wmi`) that enable real device names in the camera list and detection of WIA Imaging Devices (scanners, scientific cameras).
 
 - **macOS & Linux:**
   Open a terminal and run:
@@ -82,3 +83,38 @@ Once the application is running, use the **Setup** tab to configure your hardwar
 ## Developer Guide
 
 For detailed information on the architecture, how to add new hardware drivers, and other development topics, please see the [Developer Guide](docs/DEVELOPER_GUIDE.md).
+
+## Troubleshooting
+
+### Camera shows as "USB Camera (index 0)" instead of its real name
+
+On Windows, RoboCam-Suite resolves real device names (e.g. "Iriun Webcam", "ELP USB Camera") by querying the DirectShow or WMI device registry. This requires the `cv2-enumerate-cameras` package, which is installed automatically by `setup.bat` but is **not** installed by the cross-platform `pip install -e .` command alone.
+
+If you see generic labels, install the Windows extras manually:
+
+```cmd
+.venv\Scripts\activate
+pip install cv2-enumerate-cameras wmi
+```
+
+Then click **Scan for Cameras** in the Setup tab to refresh the list.
+
+### Imaging Devices (scanners, WIA cameras) not appearing in the camera list
+
+Devices listed under **Imaging devices** in Windows Device Manager (e.g. an Epson scanner, a WIA-class microscope camera) are enumerated via the `wmi` package. Install it as shown above, then scan again.
+
+> **Note:** WIA Imaging Devices that do not expose a DirectShow/MSMF video stream cannot be opened with `cv2.VideoCapture`. They will appear in the list with the label `[Imaging Device — may need vendor SDK]`. To capture images from such devices you will need the manufacturer's SDK (e.g. the EPSON Scan SDK, the Player One SDK, or an ASCOM driver).
+
+### Camera list is empty after scanning
+
+1. Ensure the camera is physically connected and recognised by the OS (check Device Manager on Windows).
+2. On Linux, verify your user is in the `video` group: `sudo usermod -aG video $USER` (log out and back in).
+3. On macOS, grant camera permission to the terminal application in **System Settings → Privacy & Security → Camera**.
+4. Try running in simulation mode (`python main.py --simulate`) to confirm the application itself is working.
+
+### Serial port not found / printer not connecting
+
+- On Windows, install the CH340 driver if your printer uses a CH340 USB-serial chip (link in the driver table above).
+- On Linux/macOS, the port is typically `/dev/ttyUSB0` or `/dev/tty.usbserial-*`. Check with `ls /dev/tty*` before and after plugging in the printer.
+- Ensure no other application (e.g. PrusaSlicer, OctoPrint) is holding the port open.
+- Try a lower baud rate (115200 is standard for Marlin; some boards use 250000).

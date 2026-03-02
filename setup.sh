@@ -30,6 +30,10 @@ pip install --upgrade pip
 echo "==> Installing RoboCam-Suite and its dependencies..."
 pip install -e .
 
+# Windows-only extras (cv2-enumerate-cameras, wmi) are declared with
+# sys_platform == "win32" markers in requirements.txt so pip skips them
+# automatically on Linux and macOS.  No extra step needed here.
+
 echo ""
 echo "============================================================"
 echo " Setup complete!"

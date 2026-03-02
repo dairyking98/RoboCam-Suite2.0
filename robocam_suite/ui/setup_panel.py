@@ -109,20 +109,49 @@ class _CameraEnumerator(QThread):
         'Image' device class (WIA — microscopes, scientific cameras, scanners).
         These are listed separately from OpenCV-accessible cameras because they
         may require a vendor SDK rather than a plain VideoCapture index.
-        Returns empty list if WMI is unavailable or no devices found.
+
+        Tries three methods in order:
+          1. cv2-enumerate-cameras  — returns devices with backend=700 (WIA)
+          2. WMI Win32_PnPEntity    — PNPClass="Image"
+          3. WMI Win32_PnPEntity    — PNPClass="Camera" (catches some scanners)
+        Returns empty list if all methods fail or no devices found.
         """
+        seen: set = set()
+        devices: list = []
+
+        # Method 1: cv2-enumerate-cameras — enumerates WIA devices as backend 700
+        try:
+            from cv2_enumerate_cameras import enumerate_cameras, CAP_MSMF  # type: ignore
+            # Backend 700 = CAP_MSMF on Windows; WIA scanners appear here with
+            # index -1 or a non-standard index.  We collect any entry whose name
+            # is not already in the OpenCV VideoCapture list (checked later).
+            for info in enumerate_cameras(CAP_MSMF):
+                key = info.name.strip().lower()
+                if key and key not in seen:
+                    seen.add(key)
+                    devices.append((info.name.strip(), f"cv2enum:{info.index}"))
+        except ImportError:
+            pass
+        except Exception as e:
+            logger.debug(f"[CameraEnum] cv2-enumerate-cameras imaging scan failed: {e}")
+
+        # Method 2: WMI PNPClass="Image" — scanners, WIA microscopes, etc.
         try:
             import wmi  # type: ignore
             c = wmi.WMI()
-            devices = []
             for dev in c.Win32_PnPEntity(PNPClass="Image"):
-                devices.append((dev.Name, dev.DeviceID))
-            return devices
+                if not dev.Name:
+                    continue
+                key = dev.Name.strip().lower()
+                if key not in seen:
+                    seen.add(key)
+                    devices.append((dev.Name.strip(), dev.DeviceID or ""))
         except ImportError:
             pass
         except Exception as e:
             logger.debug(f"[CameraEnum] WMI imaging devices failed: {e}")
-        return []
+
+        return devices
 
     def run(self):
         devices = []
@@ -171,15 +200,26 @@ class _CameraEnumerator(QThread):
         # --- Windows Imaging Devices (WIA class: microscopes, scientific cameras) ---
         # These are listed as informational entries; they may require a vendor SDK
         # (e.g. Player One SDK, ASCOM) rather than a plain OpenCV index.
-        # We only add them if they are NOT already covered by the OpenCV probe above
-        # (i.e. they don't open via cv2.VideoCapture).
+        # We add them only when they are NOT already covered by the OpenCV probe
+        # above (i.e. the device does not open via cv2.VideoCapture).
         if os_name == "Windows":
             imaging_devs = self._get_windows_imaging_devices()
-            # Build a set of names already found via OpenCV to avoid duplicates
-            opencv_names_found = {d[0].split(" (index ")[0].strip() for d in devices
-                                  if d[1] == "opencv"}
+            # Build a lower-case set of base names already found via OpenCV to
+            # avoid duplicates.  Use the portion before " (index N)" as the key.
+            opencv_names_lower = {
+                d[0].split(" (index ")[0].strip().lower()
+                for d in devices if d[1] == "opencv"
+            }
             for dev_name, dev_id in imaging_devs:
-                if dev_name not in opencv_names_found:
+                # Skip if this device is already represented in the OpenCV list.
+                # Use substring matching so minor name variations don't cause
+                # duplicates (e.g. "Iriun Webcam" vs "Iriun Webcam (index 0)").
+                dev_lower = dev_name.lower()
+                already_listed = any(
+                    dev_lower in ocv or ocv in dev_lower
+                    for ocv in opencv_names_lower
+                )
+                if not already_listed:
                     label = f"{dev_name}  [Imaging Device — may need vendor SDK]"
                     devices.append((label, "imaging_device", dev_id))
 

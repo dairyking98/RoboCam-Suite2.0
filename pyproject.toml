@@ -14,6 +14,14 @@ dependencies = [
     "PySide6",
 ]
 
+[project.optional-dependencies]
+# Install on Windows for real camera device names and WIA Imaging Device detection:
+#   pip install -e ".[windows]"
+windows = [
+    "cv2-enumerate-cameras",
+    "wmi",
+]
+
 [project.scripts]
 robocam = "robocam_suite.__main__:main"
 

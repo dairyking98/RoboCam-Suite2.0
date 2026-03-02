@@ -3,7 +3,9 @@ numpy
 opencv-python
 PySide6
 
-# Optional: Windows camera device name enumeration (install any one of these)
-# cv2-enumerate-cameras   # best option — maps index directly to device name
-# pygrabber               # DirectShow-based, Windows only
-# wmi                     # WMI-based fallback, Windows only
+# Windows extras — install these on Windows for real device names and WIA device detection.
+# cv2-enumerate-cameras maps OpenCV indices to human-readable names (e.g. "Iriun Webcam"
+# instead of "USB Camera (index 0)") and also enumerates WIA Imaging Devices.
+# wmi is used as a fallback and for the dedicated Imaging Devices scan.
+cv2-enumerate-cameras ; sys_platform == "win32"
+wmi                   ; sys_platform == "win32"

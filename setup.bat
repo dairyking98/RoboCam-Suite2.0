@@ -26,8 +26,15 @@ call .venv\Scripts\activate
 echo =^> Upgrading pip...
 pip install --upgrade pip
 
-echo =^> Installing RoboCam-Suite and its dependencies...
-pip install -e .
+echo =^> Installing RoboCam-Suite and its dependencies (including Windows camera extras)...
+echo    cv2-enumerate-cameras : shows real device names (e.g. "Iriun Webcam" instead of "USB Camera (index 0)")
+echo    wmi                   : detects WIA Imaging Devices (scanners, scientific cameras)
+pip install -e ".[windows]"
+IF ERRORLEVEL 1 (
+    echo WARNING: Could not install Windows camera extras.
+    echo          Camera devices will show as "USB Camera (index N)" instead of their real names.
+    echo          To install manually:  pip install cv2-enumerate-cameras wmi
+)
 
 echo.
 echo ============================================================
