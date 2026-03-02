@@ -262,6 +262,12 @@ class PlayerOneCamera(Camera):
             raise RuntimeError("[PlayerOne] Cannot start capture: camera not connected.")
         if self._capturing:
             return
+        # StopExposure first — InitCamera can leave an exposure in progress
+        # which would cause StartExposure to return POA_ERROR_EXPOSING.
+        try:
+            self._poa.StopExposure(self._cam_id)
+        except Exception:
+            pass
         # False = video mode (continuous)
         self._check(self._poa.StartExposure(self._cam_id, False), "StartExposure (video)")
         self._capturing = True

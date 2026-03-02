@@ -6,7 +6,8 @@
         "_baudrate_note": "Common printer baud rates: Monoprice/Creality=115200, older RepRap=250000, Prusa=115200",
         "timeout": 1.0,
         "home_timeout": 90.0,
-        "movement_wait_timeout": 30.0
+        "movement_wait_timeout": 120.0,
+        "_movement_wait_timeout_note": "Seconds to wait for M400 (move complete) acknowledgement. Increase if you get timeout errors on long moves across the full plate."
     },
     "camera": {
         "driver": "opencv",
