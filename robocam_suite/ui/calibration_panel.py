@@ -524,14 +524,34 @@ class CalibrationPanel(QWidget):
             logger.warning(f"[Calibration] Home error: {e}")
 
     def _goto_position(self):
+        """Move to the entered XYZ position.
+
+        If any axis field is left empty, the current stage position for that
+        axis is used — matching the 1.0 behaviour where an empty field means
+        "don't change this axis".
+        """
         try:
-            x = float(self.goto_x.text())
-            y = float(self.goto_y.text())
-            z = float(self.goto_z.text())
-            self._goto_xyz(x, y, z)
+            current = self.hw_manager.get_motion_controller().get_current_position()
+        except Exception as e:
+            logger.warning(f"[Calibration] Could not read current position: {e}")
+            current = (0.0, 0.0, 0.0)
+
+        def _parse(text: str, fallback: float) -> float:
+            stripped = text.strip()
+            if stripped == "":
+                return fallback
+            return float(stripped)  # raises ValueError if invalid
+
+        try:
+            x = _parse(self.goto_x.text(), current[0])
+            y = _parse(self.goto_y.text(), current[1])
+            z = _parse(self.goto_z.text(), current[2])
         except ValueError:
             QMessageBox.warning(self, "Invalid Input",
-                                "Please enter valid numeric values for X, Y, and Z.")
+                                "Please enter valid numeric values (or leave blank to keep current position).")
+            return
+
+        self._goto_xyz(x, y, z)
 
     def _goto_xyz(self, x: float, y: float, z: float):
         try:
