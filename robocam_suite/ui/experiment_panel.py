@@ -163,6 +163,8 @@ class _ExperimentRunner(QThread):
     def __init__(self, experiment: Experiment):
         super().__init__()
         self.experiment = experiment
+        # Wire the experiment's on_status callback to emit progress signal
+        self.experiment._on_status = lambda msg: self.progress.emit(msg)
 
     def run(self):
         self.experiment.run()
@@ -651,6 +653,9 @@ class ExperimentPanel(QWidget):
 
         self.experiment_runner = _ExperimentRunner(experiment)
         self.experiment_runner.finished.connect(self._on_experiment_finished)
+        self.experiment_runner.progress.connect(
+            lambda msg: self.status_label.setText(f"Status: {msg}")
+        )
         self.experiment_runner.start()
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)

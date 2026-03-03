@@ -108,12 +108,15 @@ class Experiment:
         hw_manager: HardwareManager,
         well_plate: WellPlate,
         params: Dict[str, Any],
+        on_status=None,
     ):
         self.hw_manager = hw_manager
         self.well_plate = well_plate
         self.params = params
         self.is_running = False
         self._stop_requested = False
+        # on_status(msg: str) — optional callback for UI status updates
+        self._on_status = on_status or (lambda msg: None)
         self.output_dir = self._create_output_directory()
 
     # ------------------------------------------------------------------
@@ -172,29 +175,34 @@ class Experiment:
             path_to_run = full_labeled
         logger.info(f"[Experiment] Visiting {len(path_to_run)} wells.")
 
+        total = len(path_to_run)
         try:
             for well_num, (well_id, position) in enumerate(path_to_run):
                 if self._stop_requested:
                     logger.info("[Experiment] Stop requested — halting.")
+                    self._on_status("Stopped.")
                     break
 
                 well_label = f"well_{well_id}"
-                logger.info(
-                    f"[{well_num + 1}/{len(path_to_run)}] {well_label} → "
+                move_msg = (
+                    f"[{well_num + 1}/{total}] Moving to {well_id} — "
                     f"X:{position[0]:.2f} Y:{position[1]:.2f} Z:{position[2]:.2f}"
                 )
+                logger.info(move_msg)
+                self._on_status(move_msg)
 
                 motion.move_absolute(x=position[0], y=position[1], z=position[2])
 
                 if mode == MODE_VIDEO:
-                    self._run_video_well(well_label, camera, gpio, laser_pin)
+                    self._run_video_well(well_label, camera, gpio, laser_pin, well_num + 1, total)
                 else:
-                    self._run_image_well(well_label, camera)
+                    self._run_image_well(well_label, camera, well_num + 1, total)
 
                 time.sleep(float(self.params.get("post_well_delay", 0.0)))
 
         except Exception as e:
             logger.error(f"[Experiment] Error during run: {e}", exc_info=True)
+            self._on_status(f"Error: {e}")
         finally:
             try:
                 gpio.write_pin(laser_pin, False)
@@ -202,12 +210,14 @@ class Experiment:
                 pass
             self.is_running = False
             logger.info("[Experiment] Finished.")
+            self._on_status("Experiment finished.")
 
     # ------------------------------------------------------------------
     # Per-well handlers
     # ------------------------------------------------------------------
 
-    def _run_video_well(self, label: str, camera, gpio, laser_pin: int):
+    def _run_video_well(self, label: str, camera, gpio, laser_pin: int,
+                         well_num: int = 0, total: int = 0):
         """
         Video capture sequence:
             dwell (laser OFF)  →  laser ON  →  laser OFF
@@ -217,38 +227,53 @@ class Experiment:
         off_pre     = float(self.params.get("video_laser_off_pre",  2.0))
         on_dur      = float(self.params.get("video_laser_on",       1.0))
         off_post    = float(self.params.get("video_laser_off_post", 2.0))
+        gpio_enabled = self.hw_manager.gpio_enabled
+        well_id = label.replace("well_", "")
+        prefix = f"[{well_num}/{total}] " if total else ""
 
         video_path = os.path.join(self.output_dir, f"{label}.avi")
         recorder: Optional[_WellRecorder] = None
 
         try:
             # 1. Dwell — settle after move, laser off
+            self._on_status(f"{prefix}Arrived at {well_id} — settling ({dwell:.1f}s)")
             time.sleep(dwell)
 
             # 2. Start recording
             if camera.is_connected:
+                self._on_status(f"{prefix}Recording {well_id} (laser off — {off_pre:.1f}s)")
                 recorder = _WellRecorder(camera, video_path)
                 logger.info(f"[Experiment] Recording → {video_path}")
             else:
                 logger.warning("[Experiment] Camera not connected — skipping recording.")
+                self._on_status(f"{prefix}Recording {well_id} — no camera")
 
             # 3. Pre-laser record (laser OFF)
             time.sleep(off_pre)
 
             # 4. Laser ON
-            gpio.write_pin(laser_pin, True)
+            if gpio_enabled:
+                gpio.write_pin(laser_pin, True)
+                self._on_status(f"{prefix}Recording {well_id} (laser ON — {on_dur:.1f}s)")
             time.sleep(on_dur)
 
             # 5. Laser OFF, post-laser record
-            gpio.write_pin(laser_pin, False)
+            if gpio_enabled:
+                gpio.write_pin(laser_pin, False)
+                self._on_status(f"{prefix}Recording {well_id} (laser off — {off_post:.1f}s)")
             time.sleep(off_post)
 
         finally:
-            gpio.write_pin(laser_pin, False)
+            try:
+                gpio.write_pin(laser_pin, False)
+            except Exception:
+                pass
             if recorder:
                 recorder.stop()
+                self._on_status(f"{prefix}Saved {well_id}.avi")
 
-    def _run_image_well(self, label: str, camera):
+    def _run_image_well(self, label: str, camera,
+                         well_num: int = 0, total: int = 0):
         """
         Image capture sequence:
             dwell (settle)  →  capture single image
@@ -256,11 +281,15 @@ class Experiment:
         dwell  = float(self.params.get("dwell", 0.5))
         fmt    = self.params.get("image_format", "PNG").upper()
         ext    = {"PNG": ".png", "TIFF": ".tiff", "JPEG": ".jpg"}.get(fmt, ".png")
+        well_id = label.replace("well_", "")
+        prefix = f"[{well_num}/{total}] " if total else ""
 
+        self._on_status(f"{prefix}Arrived at {well_id} — settling ({dwell:.1f}s)")
         time.sleep(dwell)
 
         if not camera.is_connected:
             logger.warning(f"[Experiment] Camera not connected — skipping image for {label}.")
+            self._on_status(f"{prefix}Skipped {well_id} — no camera")
             return
 
         frame = camera.read_frame()
@@ -271,6 +300,7 @@ class Experiment:
         img_path = os.path.join(self.output_dir, f"{label}{ext}")
         cv2.imwrite(img_path, frame)
         logger.info(f"[Experiment] Image saved → {img_path}")
+        self._on_status(f"{prefix}Saved {well_id}{ext}")
 
     # ------------------------------------------------------------------
     # Control

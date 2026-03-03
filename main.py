@@ -9,11 +9,18 @@ Normal mode (requires hardware):
 Simulation mode (no hardware needed — all devices are emulated):
     python main.py --simulate
 
+Debug mode (verbose G-code and driver logging to console):
+    python main.py --debug
+
+Both flags can be combined:
+    python main.py --simulate --debug
+
 Simulation mode enables individual device simulation flags in the
 config at runtime without modifying the config file on disk.
 """
 import sys
 import argparse
+import logging
 
 from PySide6.QtWidgets import QApplication
 from robocam_suite.logger import setup_logger
@@ -34,12 +41,29 @@ def parse_args():
             "Useful for development and testing on a computer without peripherals."
         ),
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable DEBUG-level logging. Prints every G-code command sent to the "
+            "printer and every response received, plus verbose SDK and driver output. "
+            "Useful for diagnosing motion, serial, and camera issues."
+        ),
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    logger = setup_logger()
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    logger = setup_logger(level=log_level)
+
+    if args.debug:
+        logger.debug(
+            "=== DEBUG MODE ENABLED ===  "
+            "All G-code TX/RX, SDK calls, and driver events will be logged."
+        )
 
     if args.simulate:
         logger.info(
@@ -65,8 +89,13 @@ def main():
     from robocam_suite.ui.main_window import MainWindow
     window = MainWindow()
 
+    title_parts = ["RoboCam-Suite 2.0"]
     if args.simulate:
-        window.setWindowTitle("RoboCam-Suite 2.0  [SIMULATION MODE]")
+        title_parts.append("[SIMULATION MODE]")
+    if args.debug:
+        title_parts.append("[DEBUG]")
+    if len(title_parts) > 1:
+        window.setWindowTitle("  ".join(title_parts))
 
     window.show()
     sys.exit(app.exec())
