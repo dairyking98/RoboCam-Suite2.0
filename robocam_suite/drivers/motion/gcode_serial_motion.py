@@ -7,6 +7,24 @@ instance that maintains full XYZ state and returns realistic Marlin-style
 responses.  This means ``get_current_position()`` returns real tracked
 coordinates, ``G28`` resets them to zero, and ``M18`` is acknowledged
 correctly — exactly as a physical printer would behave.
+
+Movement-completion strategy (ported from RoboCam-Suite 1.0)
+-------------------------------------------------------------
+At connect time the controller tests whether the firmware supports M400
+(wait-for-move-completion).  If the test succeeds, M400 is used for every
+subsequent move.  If M400 times out or errors — either during the initial
+test or during a live move — the flag is permanently cleared and a
+conservative ``time.sleep()`` fallback is used instead.
+
+send_gcode improvements (ported from RoboCam-Suite 1.0)
+--------------------------------------------------------
+- ``serial.flush()`` is called immediately after writing so the command is
+  sent to the printer without waiting for the OS buffer to drain.
+- A short ``command_delay`` (default 0.05 s) is observed before the read
+  loop starts, giving the printer time to begin processing.
+- The read loop checks ``in_waiting`` before calling ``readline()`` and
+  sleeps 10 ms when no bytes are available, avoiding a busy-wait that
+  monopolises the serial port.
 """
 import serial
 import serial.tools.list_ports
@@ -29,6 +47,15 @@ class GCodeSerialMotionController(MotionController):
         self._serial_port: Optional[serial.Serial] = None
         self._position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
 
+        # command_delay: short pause after writing a command so the printer
+        # has time to start processing before we begin reading the response.
+        self._command_delay: float = float(self._config.get("command_delay", 0.05))
+
+        # _m400_supported: None = not yet tested, True/False = known state.
+        # Tested once at connect(); permanently cleared if M400 ever fails
+        # during a live move.
+        self._m400_supported: Optional[bool] = None
+
         # In simulate mode, create a stateful virtual printer
         self._sim_printer = None
         if self._simulate:
@@ -45,7 +72,6 @@ class GCodeSerialMotionController(MotionController):
 
     def connect(self) -> None:
         if self._simulate:
-            # Nothing to open — the SimulatedPrinter is always "connected"
             logger.info("[MotionCtrl] Simulated printer connected.")
             return
 
@@ -75,6 +101,22 @@ class GCodeSerialMotionController(MotionController):
                 f"Failed to connect to motion controller on {port_name}: {e}"
             ) from e
 
+        # Test M400 support once at connect time (ported from 1.0)
+        logger.debug("[MotionCtrl] Testing M400 support...")
+        try:
+            self._send_gcode("M400", timeout=5.0)
+            self._m400_supported = True
+            logger.info("[MotionCtrl] M400 supported — will use for movement completion.")
+        except (TimeoutError, RuntimeError) as e:
+            self._m400_supported = False
+            logger.warning(
+                f"[MotionCtrl] M400 not supported or timed out during init ({e}). "
+                "Will use delay-based fallback for movement completion."
+            )
+        except Exception as e:
+            self._m400_supported = False
+            logger.warning(f"[MotionCtrl] M400 test had unexpected error: {e}. Using fallback.")
+
     def disconnect(self) -> None:
         if self._simulate:
             logger.info("[MotionCtrl] Simulated printer disconnected.")
@@ -83,6 +125,7 @@ class GCodeSerialMotionController(MotionController):
         if self._serial_port and self._serial_port.is_open:
             self._serial_port.close()
             self._serial_port = None
+            self._m400_supported = None  # reset so it's re-tested on next connect
             logger.info("[MotionCtrl] Disconnected from printer.")
 
     # ------------------------------------------------------------------
@@ -184,6 +227,11 @@ class GCodeSerialMotionController(MotionController):
         """
         Send one G-code command and collect the response.
 
+        Ported improvements from RoboCam-Suite 1.0:
+        - flush() after write so the OS buffer drains immediately.
+        - command_delay pause before the read loop starts.
+        - in_waiting check + 10 ms sleep to avoid busy-waiting.
+
         In simulate mode the command is forwarded to SimulatedPrinter.
         On real hardware it is written to the serial port and the
         response is read until an "ok" or "error" line is received.
@@ -196,29 +244,34 @@ class GCodeSerialMotionController(MotionController):
         if not self.is_connected:
             raise ConnectionError("Motion controller is not connected.")
 
+        if timeout is None:
+            timeout = float(self._config.get("serial_timeout", 10.0))
+
         self._serial_port.write((command + "\n").encode("utf-8"))
+        self._serial_port.flush()                     # drain OS buffer immediately
+        time.sleep(self._command_delay)               # let printer start processing
 
         start = time.time()
         lines: list[str] = []
+
         while True:
-            raw = self._serial_port.readline()
-            if not raw:
-                if timeout and (time.time() - start) > timeout:
-                    raise TimeoutError(
-                        f"Timeout waiting for 'ok' from printer after {command!r}."
-                    )
-                continue
-            line = raw.decode("utf-8", errors="replace").strip()
-            if line:
-                lines.append(line)
-                if line.lower().startswith("ok"):
-                    break
-                if line.lower().startswith("error"):
-                    raise RuntimeError(f"Printer error: {line}")
-            if timeout and (time.time() - start) > timeout:
+            elapsed = time.time() - start
+            if elapsed > timeout:
                 raise TimeoutError(
                     f"Timeout waiting for 'ok' from printer after {command!r}."
                 )
+
+            if self._serial_port.in_waiting > 0:
+                raw = self._serial_port.readline()
+                line = raw.decode("utf-8", errors="replace").strip()
+                if line:
+                    lines.append(line)
+                    if line.lower().startswith("ok"):
+                        break
+                    if line.lower().startswith("error"):
+                        raise RuntimeError(f"Printer error: {line}")
+            else:
+                time.sleep(0.01)   # 10 ms idle sleep — avoid busy-wait
 
         return "\n".join(lines)
 
@@ -246,54 +299,45 @@ class GCodeSerialMotionController(MotionController):
         """
         Block until all queued moves are complete.
 
-        Strategy: poll M114 every 200 ms and compare the returned position
-        against the last two readings.  Once the position has been stable
-        (unchanged within 0.05 mm) for two consecutive polls the move is
-        considered finished.  This avoids the M400 approach entirely, which
-        is unreliable on Marlin because the 'ok' response can be delayed or
-        lost when the serial output buffer fills with temperature reports.
+        Strategy (ported from RoboCam-Suite 1.0):
+        1. If M400 is known to be supported, send it and wait for 'ok'.
+        2. If M400 times out or errors during a live move, permanently
+           mark it as unsupported and fall back to a conservative sleep.
+        3. If M400 was never tested (simulation path), return immediately.
 
-        Falls back to a simple time.sleep() if the serial port is not open
-        (simulation mode is handled separately in _send_gcode).
+        The fallback sleep is capped at 2 s — enough for the printer to
+        finish any in-progress move at normal speeds without blocking the
+        experiment for an unreasonably long time.
         """
         if self._simulate:
-            # SimulatedPrinter handles timing internally; just sync position.
             return
 
-        timeout  = float(self._config.get("movement_wait_timeout", 30.0))
-        interval = 0.2   # seconds between M114 polls
-        tol      = 0.05  # mm — positions within this are considered equal
+        timeout = float(self._config.get("movement_wait_timeout", 30.0))
 
-        deadline = time.time() + timeout
-        prev_pos: Optional[Tuple[float, float, float]] = None
-        stable_count = 0
+        if self._m400_supported is None:
+            # Shouldn't happen after connect(), but handle gracefully
+            logger.debug("[MotionCtrl] M400 support unknown — using delay fallback.")
+            time.sleep(2.0)
+            return
 
-        while time.time() < deadline:
+        if self._m400_supported:
             try:
-                # get_current_position() sends M114 and parses the response
-                pos = self.get_current_position()
-            except Exception:
-                time.sleep(interval)
-                continue
+                self._send_gcode("M400", timeout=timeout)
+                return
+            except (TimeoutError, RuntimeError) as e:
+                logger.warning(
+                    f"[MotionCtrl] M400 failed during move ({e}). "
+                    "Marking M400 as unsupported — switching to delay fallback."
+                )
+                self._m400_supported = False
+            except Exception as e:
+                logger.warning(f"[MotionCtrl] M400 unexpected error: {e}. Using fallback.")
+                self._m400_supported = False
 
-            if prev_pos is not None:
-                dx = abs(pos[0] - prev_pos[0])
-                dy = abs(pos[1] - prev_pos[1])
-                dz = abs(pos[2] - prev_pos[2])
-                if dx < tol and dy < tol and dz < tol:
-                    stable_count += 1
-                    if stable_count >= 2:
-                        return  # position stable — move complete
-                else:
-                    stable_count = 0
-
-            prev_pos = pos
-            time.sleep(interval)
-
-        logger.warning(
-            "[MotionCtrl] Movement wait timed out after %.0f s — "
-            "continuing anyway.", timeout
-        )
+        # Fallback: conservative sleep (same as 1.0)
+        fallback_delay = min(timeout, 2.0)
+        logger.debug(f"[MotionCtrl] Using delay fallback: {fallback_delay:.1f} s")
+        time.sleep(fallback_delay)
 
     def _sync_position(self) -> None:
         """Update the cached position from the printer."""
