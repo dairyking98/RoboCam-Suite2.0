@@ -205,6 +205,29 @@ class GCodeSerialMotionController(MotionController):
         """
         return self._send_gcode(command.strip(), read_response=True)
 
+    def send_and_receive(self, command: str, timeout: float = 10.0) -> list[str]:
+        """
+        Send a raw G-code command and return all response lines as a list.
+
+        Intended for the debug panel — returns every line the printer sends
+        before the terminating 'ok', including informational lines such as
+        those from M503, M220, M201, M204, M205, etc.
+
+        Parameters
+        ----------
+        command:
+            G-code command string, e.g. ``"M503"``.
+        timeout:
+            Maximum seconds to wait for the 'ok' terminator.
+
+        Returns
+        -------
+        list[str]
+            All non-empty lines received, including the final 'ok'.
+        """
+        raw = self._send_gcode(command.strip(), timeout=timeout)
+        return [l for l in raw.splitlines() if l.strip()]
+
     # ------------------------------------------------------------------
     # Connection status
     # ------------------------------------------------------------------

@@ -474,6 +474,14 @@ class CalibrationPanel(QWidget):
         qty_row.addWidget(self.rows_spin)
         layout.addLayout(qty_row, 4, 0, 1, 4)
 
+        update_map_btn = QPushButton("Update Well Map")
+        update_map_btn.setToolTip(
+            "Recompute well positions from the current corners and dimensions\n"
+            "and refresh the well map on the right."
+        )
+        update_map_btn.clicked.connect(self._on_update_well_map)
+        layout.addWidget(update_map_btn, 5, 0, 1, 4)
+
         return grp
 
     def _build_save_load_group(self) -> QGroupBox:
@@ -488,8 +496,11 @@ class CalibrationPanel(QWidget):
 
         # Row 1 — buttons
         btn_row = QHBoxLayout()
-        save_btn = QPushButton("Save Calibration\u2026")
-        save_btn.setToolTip("Save the current corner positions to a .json file.")
+        save_btn = QPushButton("Update \u0026 Save Calibration\u2026")
+        save_btn.setToolTip(
+            "Refresh the well map from current corners/dimensions, then\n"
+            "save everything to a .json file."
+        )
         save_btn.clicked.connect(self._save_calibration)
         btn_row.addWidget(save_btn)
 
@@ -613,6 +624,30 @@ class CalibrationPanel(QWidget):
         """Generate the well map silently if all four corners are set."""
         if all(self.corners[n]["position"] is not None for n in CORNER_NAMES):
             self._generate_well_map()
+
+    def _on_update_well_map(self):
+        """Explicit 'Update Well Map' button handler."""
+        cols = self.cols_spin.value()
+        rows = self.rows_spin.value()
+        missing = [n for n in CORNER_NAMES if self.corners[n]["position"] is None]
+        if missing:
+            self._cal_status_label.setText(
+                f"Cannot update map — corners not set: {', '.join(missing)}"
+            )
+            self._cal_status_label.setStyleSheet("font-size: 10px; color: red;")
+            return
+        if rows == 0 or cols == 0:
+            self._cal_status_label.setText(
+                "Cannot update map — set Rows and Columns first."
+            )
+            self._cal_status_label.setStyleSheet("font-size: 10px; color: red;")
+            return
+        self._generate_well_map()
+        self._cal_status_label.setText(
+            f"Well map updated: {rows} rows \u00d7 {cols} cols"
+        )
+        self._cal_status_label.setStyleSheet("font-size: 10px; color: green;")
+        self.corners_changed.emit()
 
     def _compute_well_positions(self) -> Optional[list]:
         corners = [self.corners[n]["position"] for n in CORNER_NAMES]

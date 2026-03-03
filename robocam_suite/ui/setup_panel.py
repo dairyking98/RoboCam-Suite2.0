@@ -26,7 +26,7 @@ import serial.tools.list_ports
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QGroupBox, QLabel, QPushButton, QComboBox, QSpinBox,
-    QCheckBox, QScrollArea,
+    QCheckBox, QScrollArea, QTextEdit, QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 
@@ -389,6 +389,7 @@ class SetupPanel(QWidget):
 
         root.addWidget(self._build_camera_group())
         root.addWidget(self._build_printer_group())
+        root.addWidget(self._build_printer_debug_group())
         root.addWidget(self._build_gpio_group())
         root.addWidget(self._build_status_group())
         root.addWidget(self._build_connect_group())
@@ -505,6 +506,95 @@ class SetupPanel(QWidget):
         self.printer_apply_btn.clicked.connect(self._apply_printer)
         layout.addWidget(self.printer_apply_btn, 2, 0, 1, 3)
         return grp
+
+    def _build_printer_debug_group(self) -> QGroupBox:
+        """Raw G-code debug panel for querying printer parameters."""
+        grp = QGroupBox("3-D Printer — Parameter Debug")
+        grp.setToolTip(
+            "Send raw G-code queries to the printer and inspect the raw response.\n"
+            "Use this to identify which commands and parsing are needed for\n"
+            "feed-rate, acceleration, and jerk profiles."
+        )
+        layout = QVBoxLayout(grp)
+        layout.setSpacing(4)
+
+        # Preset query buttons
+        btn_row = QHBoxLayout()
+        for label, cmd in [
+            ("M220 (Feed %)",  "M220"),
+            ("M203 (Max Feed)", "M203"),
+            ("M201 (Max Accel)", "M201"),
+            ("M204 (Accel)",   "M204"),
+            ("M205 (Jerk/Adv)", "M205"),
+            ("M503 (All)",     "M503"),
+        ]:
+            btn = QPushButton(label)
+            btn.setToolTip(f"Send '{cmd}' and display the raw printer response.")
+            btn.clicked.connect(lambda checked=False, c=cmd: self._send_debug_gcode(c))
+            btn_row.addWidget(btn)
+        layout.addLayout(btn_row)
+
+        # Custom command row
+        custom_row = QHBoxLayout()
+        custom_row.addWidget(QLabel("Custom:"))
+        self._debug_cmd_input = QComboBox()
+        self._debug_cmd_input.setEditable(True)
+        self._debug_cmd_input.setToolTip("Enter any G-code command to send.")
+        for cmd in ["M220", "M203", "M201", "M204", "M205", "M503", "M114", "M119"]:
+            self._debug_cmd_input.addItem(cmd)
+        custom_row.addWidget(self._debug_cmd_input, stretch=1)
+        send_btn = QPushButton("Send")
+        send_btn.setToolTip("Send the custom command and display the raw response.")
+        send_btn.clicked.connect(
+            lambda: self._send_debug_gcode(self._debug_cmd_input.currentText().strip())
+        )
+        custom_row.addWidget(send_btn)
+        clear_btn = QPushButton("Clear")
+        clear_btn.setToolTip("Clear the response log.")
+        clear_btn.clicked.connect(lambda: self._debug_output.clear())
+        custom_row.addWidget(clear_btn)
+        layout.addLayout(custom_row)
+
+        # Response display
+        self._debug_output = QTextEdit()
+        self._debug_output.setReadOnly(True)
+        self._debug_output.setFont(
+            self._debug_output.font().__class__("Courier New", 9)
+        )
+        self._debug_output.setMinimumHeight(120)
+        self._debug_output.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self._debug_output.setPlaceholderText(
+            "Printer responses will appear here.\n"
+            "Connect the printer first, then click a query button."
+        )
+        layout.addWidget(self._debug_output)
+
+        return grp
+
+    def _send_debug_gcode(self, cmd: str):
+        """Send a raw G-code command and append the response to the debug log."""
+        if not cmd:
+            return
+        try:
+            mc = self._hw.get_motion_controller()
+            if not mc.is_connected:
+                self._debug_output.append("[Error] Printer not connected.")
+                return
+            # Use the low-level serial send/receive so we capture all response lines
+            response_lines = mc.send_and_receive(cmd)
+            self._debug_output.append(f">>> {cmd}")
+            for line in response_lines:
+                self._debug_output.append(f"    {line}")
+            self._debug_output.append("")
+        except AttributeError:
+            self._debug_output.append(
+                f"[Error] Motion controller does not expose send_and_receive().\n"
+                f"        Add it to gcode_serial_motion.py to enable debug queries."
+            )
+        except Exception as e:
+            self._debug_output.append(f"[Error] {e}")
 
     def _build_gpio_group(self) -> QGroupBox:
         grp = QGroupBox("GPIO Controller (Arduino / laser)")
