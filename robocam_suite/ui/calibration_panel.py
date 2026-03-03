@@ -797,13 +797,58 @@ class CalibrationPanel(QWidget):
                 break
         if not matched:
             self._custom_rb.setChecked(True)
-        self.cols_spin.setValue(int(s.get("cols", 0)))
-        self.rows_spin.setValue(int(s.get("rows", 0)))
-        saved_corners = s.get("corners", {})
-        for name, pos in saved_corners.items():
-            if pos is not None and name in self.corners:
+        # Attempt to auto-load the most recently saved calibration file;
+        # only fall back to bare session values if no file is found.
+        if not self._auto_load_latest_calibration():
+            self.cols_spin.setValue(int(s.get("cols", 0)))
+            self.rows_spin.setValue(int(s.get("rows", 0)))
+            saved_corners = s.get("corners", {})
+            for name, pos in saved_corners.items():
+                if pos is not None and name in self.corners:
+                    self.corners[name]["position"] = pos
+                    self.corners[name]["label"].setText(
+                        f"X:{pos[0]:.2f}  Y:{pos[1]:.2f}  Z:{pos[2]:.2f}"
+                    )
+                    self.corners[name]["label"].setStyleSheet("color: green;")
+
+    def _auto_load_latest_calibration(self) -> bool:
+        """Find the most recently modified .json file in the calibration
+        directory and load it silently.  Returns True if a file was loaded."""
+        cal_dir = _default_cal_dir()
+        if not cal_dir.exists():
+            return False
+        json_files = sorted(
+            cal_dir.glob("*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not json_files:
+            return False
+        path = json_files[0]
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(f"[Calibration] Auto-load failed for {path}: {e}")
+            return False
+
+        corners = data.get("corners", {})
+        for name in CORNER_NAMES:
+            pos = corners.get(name)
+            if pos is not None:
                 self.corners[name]["position"] = pos
                 self.corners[name]["label"].setText(
                     f"X:{pos[0]:.2f}  Y:{pos[1]:.2f}  Z:{pos[2]:.2f}"
                 )
                 self.corners[name]["label"].setStyleSheet("color: green;")
+            # Corners absent from the file are left as "Not Set" (no change)
+
+        if "cols" in data:
+            self.cols_spin.setValue(int(data["cols"]))
+        if "rows" in data:
+            self.rows_spin.setValue(int(data["rows"]))
+
+        self._cal_status_label.setText(f"Loaded: {path.name}")
+        self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
+        logger.info(f"[Calibration] Auto-loaded calibration from {path}")
+        return True
