@@ -221,6 +221,8 @@ class CalibrationPanel(QWidget):
       Col 3 — Well map (full height)
     """
 
+    corners_changed = Signal()  # emitted whenever any corner is set or calibration is loaded
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.hw_manager = hw_manager
@@ -588,6 +590,7 @@ class CalibrationPanel(QWidget):
             self._persist_corners()
             # Auto-generate the well map whenever all four corners are now set
             self._try_auto_generate_well_map()
+            self.corners_changed.emit()
         except Exception as e:
             logger.warning(f"[Calibration] Set corner error: {e}")
 
@@ -723,6 +726,7 @@ class CalibrationPanel(QWidget):
         self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
         logger.info(f"[Calibration] Loaded from {path}")
         self._generate_well_map()
+        self.corners_changed.emit()
 
     # ------------------------------------------------------------------
     # Public accessors used by ExperimentPanel

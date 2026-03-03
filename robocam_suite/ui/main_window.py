@@ -57,12 +57,15 @@ class MainWindow(QMainWindow):
         # Wire calibration → experiment auto-sync
         # Sync once on startup (picks up any session-restored calibration)
         self.experiment_panel.sync_from_calibration()
-        # Re-sync whenever the user changes rows or columns in Calibration
+        # Re-sync whenever the user changes rows, columns, or corner positions
         self.calibration_panel.cols_spin.valueChanged.connect(
             lambda _: self.experiment_panel.sync_from_calibration()
         )
         self.calibration_panel.rows_spin.valueChanged.connect(
             lambda _: self.experiment_panel.sync_from_calibration()
+        )
+        self.calibration_panel.corners_changed.connect(
+            self.experiment_panel.sync_from_calibration
         )
 
         # Attempt initial hardware connection (non-fatal)

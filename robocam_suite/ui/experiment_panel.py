@@ -187,8 +187,8 @@ class _WellSelectionGroup(QGroupBox):
         self.setToolTip(
             "Click and drag over wells to select or deselect them.\n"
             "The first well you touch sets the target state for the whole drag:\n"
-            "  • If it was selected → the drag deselects all wells it passes over.\n"
-            "  • If it was deselected → the drag selects all wells it passes over."
+            "  \u2022 If it was selected \u2192 the drag deselects all wells it passes over.\n"
+            "  \u2022 If it was deselected \u2192 the drag selects all wells it passes over."
         )
 
         outer = QVBoxLayout(self)
@@ -197,40 +197,69 @@ class _WellSelectionGroup(QGroupBox):
 
         # Toolbar
         toolbar = QHBoxLayout()
-        check_all_btn = QPushButton("Check All")
-        check_all_btn.setFixedHeight(24)
-        uncheck_all_btn = QPushButton("Uncheck All")
-        uncheck_all_btn.setFixedHeight(24)
-        invert_btn = QPushButton("Invert")
-        invert_btn.setFixedHeight(24)
+        self._check_all_btn = QPushButton("Check All")
+        self._check_all_btn.setFixedHeight(24)
+        self._uncheck_all_btn = QPushButton("Uncheck All")
+        self._uncheck_all_btn.setFixedHeight(24)
+        self._invert_btn = QPushButton("Invert")
+        self._invert_btn.setFixedHeight(24)
         self._count_label = QLabel("")
         self._count_label.setStyleSheet(STATUS_STYLE)
 
-        toolbar.addWidget(check_all_btn)
-        toolbar.addWidget(uncheck_all_btn)
-        toolbar.addWidget(invert_btn)
+        toolbar.addWidget(self._check_all_btn)
+        toolbar.addWidget(self._uncheck_all_btn)
+        toolbar.addWidget(self._invert_btn)
         toolbar.addWidget(self._count_label, stretch=1)
         outer.addLayout(toolbar)
 
-        # Scroll area containing the WellGrid
+        # Placeholder shown when no calibration is loaded
+        self._placeholder = QLabel(
+            "No calibration loaded.\n"
+            "Set all four corner positions in the Calibration tab first."
+        )
+        self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._placeholder.setStyleSheet("color: grey; font-style: italic;")
+        outer.addWidget(self._placeholder, stretch=1)
+
+        # Scroll area containing the WellGrid (hidden until calibration is ready)
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setVisible(False)
         outer.addWidget(self._scroll, stretch=1)
 
-        self._grid = WellGrid(rows=8, cols=12, mode=WellGrid.Mode.SELECT)
+        self._grid = WellGrid(rows=0, cols=0, mode=WellGrid.Mode.SELECT)
         self._grid.selection_changed.connect(self._update_count)
         self._scroll.setWidget(self._grid)
 
-        check_all_btn.clicked.connect(self._grid.check_all)
-        uncheck_all_btn.clicked.connect(self._grid.uncheck_all)
-        invert_btn.clicked.connect(self._grid.invert)
+        self._check_all_btn.clicked.connect(self._grid.check_all)
+        self._uncheck_all_btn.clicked.connect(self._grid.uncheck_all)
+        self._invert_btn.clicked.connect(self._grid.invert)
 
+        # Toolbar buttons disabled until calibration is loaded
+        self._set_toolbar_enabled(False)
         self._update_count()
 
+    def _set_toolbar_enabled(self, enabled: bool):
+        self._check_all_btn.setEnabled(enabled)
+        self._uncheck_all_btn.setEnabled(enabled)
+        self._invert_btn.setEnabled(enabled)
+
     def rebuild(self, rows: int, cols: int):
+        """Populate the grid with rows x cols wells and show it."""
         self._grid.rebuild(rows, cols)
+        self._placeholder.setVisible(False)
+        self._scroll.setVisible(True)
+        self._set_toolbar_enabled(True)
+        self._update_count()
+
+    def clear_calibration(self):
+        """Hide the grid and show the placeholder (calibration no longer valid)."""
+        self._grid.rebuild(0, 0)
+        self._scroll.setVisible(False)
+        self._placeholder.setVisible(True)
+        self._set_toolbar_enabled(False)
         self._update_count()
 
     def get_selected_indices(self) -> list[int]:
@@ -567,11 +596,20 @@ class ExperimentPanel(QWidget):
     def sync_from_calibration(self):
         """Called by MainWindow whenever calibration changes or on startup."""
         if self.calibration_panel is None:
+            self.well_selection.clear_calibration()
             return
+
+        corners = self.calibration_panel.get_corners()
+        all_set = all(corners.get(name) is not None for name in CORNER_NAMES)
+
+        if not all_set:
+            self.well_selection.clear_calibration()
+            logger.info("[Experiment] Calibration incomplete — well grid cleared.")
+            return
+
         cols, rows = self.calibration_panel.get_well_dimensions()
         self.well_selection.rebuild(rows, cols)
-        logger.info(f"[Experiment] Synced well grid: {rows} rows × {cols} cols")
-
+        logger.info(f"[Experiment] Synced well grid: {rows} rows \u00d7 {cols} cols")
     # ------------------------------------------------------------------
     # Experiment control
     # ------------------------------------------------------------------
