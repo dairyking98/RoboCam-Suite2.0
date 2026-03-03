@@ -616,6 +616,10 @@ class ExperimentPanel(QWidget):
             return
 
         cols, rows = self.calibration_panel.get_well_dimensions()
+        if rows == 0 or cols == 0:
+            self.well_selection.clear_calibration()
+            logger.info("[Experiment] Well dimensions not set — well grid cleared.")
+            return
         self.well_selection.rebuild(rows, cols)
         logger.info(f"[Experiment] Synced well grid: {rows} rows \u00d7 {cols} cols")
     # ------------------------------------------------------------------

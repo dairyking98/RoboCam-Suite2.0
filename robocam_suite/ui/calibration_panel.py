@@ -462,14 +462,14 @@ class CalibrationPanel(QWidget):
         qty_row = QHBoxLayout()
         qty_row.addWidget(QLabel("Columns (X):"))
         self.cols_spin = QSpinBox()
-        self.cols_spin.setRange(1, 48)
-        self.cols_spin.setValue(12)
+        self.cols_spin.setRange(0, 48)
+        self.cols_spin.setValue(0)
         self.cols_spin.setToolTip("Number of wells along the X axis (columns).")
         qty_row.addWidget(self.cols_spin)
         qty_row.addWidget(QLabel("Rows (Y):"))
         self.rows_spin = QSpinBox()
-        self.rows_spin.setRange(1, 32)
-        self.rows_spin.setValue(8)
+        self.rows_spin.setRange(0, 32)
+        self.rows_spin.setValue(0)
         self.rows_spin.setToolTip("Number of wells along the Y axis (rows).")
         qty_row.addWidget(self.rows_spin)
         layout.addLayout(qty_row, 4, 0, 1, 4)
@@ -797,8 +797,8 @@ class CalibrationPanel(QWidget):
                 break
         if not matched:
             self._custom_rb.setChecked(True)
-        self.cols_spin.setValue(int(s.get("cols", 12)))
-        self.rows_spin.setValue(int(s.get("rows", 8)))
+        self.cols_spin.setValue(int(s.get("cols", 0)))
+        self.rows_spin.setValue(int(s.get("rows", 0)))
         saved_corners = s.get("corners", {})
         for name, pos in saved_corners.items():
             if pos is not None and name in self.corners:
