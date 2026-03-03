@@ -575,6 +575,12 @@ class ExperimentPanel(QWidget):
         output_folder_btn.setToolTip("Change the output folder for captured images and videos.")
         output_folder_btn.clicked.connect(self._choose_output_folder)
         out_row.addWidget(output_folder_btn)
+
+        open_folder_btn = QPushButton("Open")
+        open_folder_btn.setFixedWidth(44)
+        open_folder_btn.setToolTip("Open the output folder in Explorer.")
+        open_folder_btn.clicked.connect(self._open_output_folder)
+        out_row.addWidget(open_folder_btn)
         layout.addLayout(out_row)
 
         return grp
@@ -672,6 +678,7 @@ class ExperimentPanel(QWidget):
             "pattern":      self.pattern_combo.currentText(),
             "dwell":        self.dwell_input.text(),
             "image_format": self.image_format_combo.currentText(),
+            "output_dir":   str(self._get_output_dir()),
         }
         for k, edit in self._video_inputs.items():
             d[f"video_{k}"] = edit.text()
@@ -727,6 +734,17 @@ class ExperimentPanel(QWidget):
         d = getattr(self, "_output_dir", _default_output_dir())
         d.mkdir(parents=True, exist_ok=True)
         return d
+
+    def _open_output_folder(self):
+        """Open the output folder in the system file explorer."""
+        import subprocess, sys
+        folder = self._get_output_dir()
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", str(folder)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(folder)])
+        else:
+            subprocess.Popen(["xdg-open", str(folder)])
 
     def _save_preset(self):
         preset_dir = self._get_preset_dir()
