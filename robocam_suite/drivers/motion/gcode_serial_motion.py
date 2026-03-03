@@ -247,7 +247,7 @@ class GCodeSerialMotionController(MotionController):
         if timeout is None:
             timeout = float(self._config.get("serial_timeout", 10.0))
 
-        logger.debug(f"[GCode TX] {command!r}")
+        logger.info(f"[GCode TX] {command!r}")
         self._serial_port.write((command + "\n").encode("utf-8"))
         self._serial_port.flush()                     # drain OS buffer immediately
         time.sleep(self._command_delay)               # let printer start processing
@@ -266,7 +266,7 @@ class GCodeSerialMotionController(MotionController):
                 raw = self._serial_port.readline()
                 line = raw.decode("utf-8", errors="replace").strip()
                 if line:
-                    logger.debug(f"[GCode RX] {line!r}")
+                    logger.info(f"[GCode RX] {line!r}")
                     lines.append(line)
                     if line.lower().startswith("ok"):
                         break
