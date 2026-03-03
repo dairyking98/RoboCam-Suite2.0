@@ -101,21 +101,10 @@ class GCodeSerialMotionController(MotionController):
                 f"Failed to connect to motion controller on {port_name}: {e}"
             ) from e
 
-        # Test M400 support once at connect time (ported from 1.0)
-        logger.debug("[MotionCtrl] Testing M400 support...")
-        try:
-            self._send_gcode("M400", timeout=5.0)
-            self._m400_supported = True
-            logger.info("[MotionCtrl] M400 supported — will use for movement completion.")
-        except (TimeoutError, RuntimeError) as e:
-            self._m400_supported = False
-            logger.warning(
-                f"[MotionCtrl] M400 not supported or timed out during init ({e}). "
-                "Will use delay-based fallback for movement completion."
-            )
-        except Exception as e:
-            self._m400_supported = False
-            logger.warning(f"[MotionCtrl] M400 test had unexpected error: {e}. Using fallback.")
+        # M400 support is tested lazily on the first move (same as 1.0).
+        # Testing at connect time is unreliable because the printer may still
+        # be processing its boot sequence when connect() returns.
+        logger.info("[MotionCtrl] M400 support will be tested on first move.")
 
     def disconnect(self) -> None:
         if self._simulate:
@@ -329,10 +318,24 @@ class GCodeSerialMotionController(MotionController):
         timeout = float(self._config.get("movement_wait_timeout", 30.0))
 
         if self._m400_supported is None:
-            # Shouldn't happen after connect(), but handle gracefully
-            logger.debug("[MotionCtrl] M400 support unknown — using delay fallback.")
-            time.sleep(2.0)
-            return
+            # Lazy test on first move — identical to 1.0 behaviour.
+            # The printer has had time to boot by now (first move is always
+            # issued well after connect()).
+            logger.info("[MotionCtrl] Testing M400 support on first move...")
+            try:
+                self._send_gcode("M400", timeout=5.0)
+                self._m400_supported = True
+                logger.info("[MotionCtrl] M400 supported — will use for movement completion.")
+                return
+            except (TimeoutError, RuntimeError) as e:
+                self._m400_supported = False
+                logger.warning(
+                    f"[MotionCtrl] M400 not supported or timed out ({e}). "
+                    "Switching to delay-based fallback."
+                )
+            except Exception as e:
+                self._m400_supported = False
+                logger.warning(f"[MotionCtrl] M400 test error: {e}. Using fallback.")
 
         if self._m400_supported:
             try:
