@@ -549,6 +549,7 @@ class CalibrationPanel(QWidget):
         "don't change this axis".
         """
         try:
+            # Use cached position (no serial command) — just to fill empty fields
             current = self.hw_manager.get_motion_controller().get_current_position()
         except Exception as e:
             logger.warning(f"[Calibration] Could not read current position: {e}")
@@ -584,7 +585,8 @@ class CalibrationPanel(QWidget):
 
     def _set_corner(self, name: str):
         try:
-            pos = self.hw_manager.get_motion_controller().get_current_position()
+            # Query live position from printer so the corner is accurate
+            pos = self.hw_manager.get_motion_controller().query_current_position()
             self.corners[name]["position"] = list(pos)
             self.corners[name]["label"].setText(
                 f"X:{pos[0]:.2f}  Y:{pos[1]:.2f}  Z:{pos[2]:.2f}"

@@ -159,11 +159,23 @@ class GCodeSerialMotionController(MotionController):
 
     def get_current_position(self) -> Tuple[float, float, float]:
         """
-        Query the printer for its current position via M114 and return
-        (X, Y, Z) as floats.
+        Return the **cached** (X, Y, Z) position without sending any serial
+        command.  The cache is updated after every move and on connect.
 
-        In simulation mode the position is read directly from the
-        SimulatedPrinter's state, which is updated by every move command.
+        Use ``query_current_position()`` when you need a live reading from
+        the printer (e.g. after a manual jog or for diagnostics).
+        """
+        if self._simulate:
+            self._position = self._sim_printer.position
+        return self._position
+
+    def query_current_position(self) -> Tuple[float, float, float]:
+        """
+        Send M114 to the printer, update the cache, and return (X, Y, Z).
+
+        Only call this when a live reading is genuinely needed — it sends
+        a serial command and logs it.  Prefer ``get_current_position()``
+        for UI display polling.
         """
         if self._simulate:
             self._position = self._sim_printer.position
@@ -342,5 +354,5 @@ class GCodeSerialMotionController(MotionController):
         time.sleep(fallback_delay)
 
     def _sync_position(self) -> None:
-        """Update the cached position from the printer."""
-        self.get_current_position()
+        """Send M114 and update the cached position from the printer."""
+        self.query_current_position()
