@@ -529,7 +529,10 @@ class CalibrationPanel(QWidget):
     def _move(self, axis: str, direction: int):
         try:
             step = float(self.step_size_input.text())
-            self.hw_manager.get_motion_controller().move_relative(**{axis: direction * step})
+            mc = self.hw_manager.get_motion_controller()
+            mc.move_relative(**{axis: direction * step})
+            # Sync cache with live position so display is accurate after jog
+            mc.query_current_position()
             self._update_position_display()
         except Exception as e:
             logger.warning(f"[Calibration] Move error: {e}")
@@ -574,7 +577,10 @@ class CalibrationPanel(QWidget):
 
     def _goto_xyz(self, x: float, y: float, z: float):
         try:
-            self.hw_manager.get_motion_controller().move_absolute(x=x, y=y, z=z)
+            mc = self.hw_manager.get_motion_controller()
+            mc.move_absolute(x=x, y=y, z=z)
+            # Sync cache with live position so display is accurate after go-to
+            mc.query_current_position()
             self.goto_x.setText(f"{x:.3f}")
             self.goto_y.setText(f"{y:.3f}")
             self.goto_z.setText(f"{z:.3f}")
