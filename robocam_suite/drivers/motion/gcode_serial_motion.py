@@ -205,6 +205,158 @@ class GCodeSerialMotionController(MotionController):
         """
         return self._send_gcode(command.strip(), read_response=True)
 
+    # ------------------------------------------------------------------
+    # Printer profile helpers (feed-rate / acceleration / jerk)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def parse_m503_profiles(lines: list[str]) -> dict:
+        """
+        Parse the line list returned by M503 (or a single-command response)
+        and extract feed-rate, acceleration, and jerk values.
+
+        Returns a dict with keys (all values are floats or None if not found)::
+
+            {
+              # M220 — feed-rate override %
+              "feedrate_pct": 100.0,
+
+              # M203 — maximum feed rates (mm/s)
+              "max_feed_x": 500.0, "max_feed_y": 500.0,
+              "max_feed_z": 5.0,   "max_feed_e": 50.0,
+
+              # M201 — maximum acceleration (mm/s²)
+              "max_accel_x": 500.0, "max_accel_y": 500.0,
+              "max_accel_z": 100.0, "max_accel_e": 2000.0,
+
+              # M204 — print / retract / travel acceleration (mm/s²)
+              "accel_print": 500.0, "accel_retract": 1000.0, "accel_travel": 500.0,
+
+              # M205 — jerk (mm/s)
+              "jerk_x": 10.0, "jerk_y": 10.0,
+              "jerk_z": 0.4,  "jerk_e": 5.0,
+            }
+        """
+        import re
+        result: dict = {}
+
+        def _find(pattern, text, group=1):
+            m = re.search(pattern, text)
+            return float(m.group(group)) if m else None
+
+        for raw_line in lines:
+            # Strip leading 'echo:' and/or 'echo: ' prefix (M503 format)
+            line = re.sub(r'^echo:\s*', '', raw_line).strip()
+
+            # M220 direct response: "FR:100%"
+            if line.startswith("FR:"):
+                m = re.search(r'FR:(\d+(?:\.\d+)?)%', line)
+                if m:
+                    result["feedrate_pct"] = float(m.group(1))
+
+            # M220 S<val>  (from M503 or direct M220 response)
+            if re.match(r'M220\b', line):
+                v = _find(r'S([\d.]+)', line)
+                if v is not None:
+                    result["feedrate_pct"] = v
+
+            # M203 X<> Y<> Z<> E<>
+            if re.match(r'M203\b', line):
+                result["max_feed_x"] = _find(r'X([\d.]+)', line)
+                result["max_feed_y"] = _find(r'Y([\d.]+)', line)
+                result["max_feed_z"] = _find(r'Z([\d.]+)', line)
+                result["max_feed_e"] = _find(r'E([\d.]+)', line)
+
+            # M201 X<> Y<> Z<> E<>
+            if re.match(r'M201\b', line):
+                result["max_accel_x"] = _find(r'X([\d.]+)', line)
+                result["max_accel_y"] = _find(r'Y([\d.]+)', line)
+                result["max_accel_z"] = _find(r'Z([\d.]+)', line)
+                result["max_accel_e"] = _find(r'E([\d.]+)', line)
+
+            # M204 P<print> R<retract> T<travel>
+            # Also matches direct M204 response: "Acceleration: P500.00 R1000.00 T500.00"
+            if re.match(r'M204\b', line) or line.startswith("Acceleration:"):
+                result["accel_print"]   = _find(r'P([\d.]+)', line)
+                result["accel_retract"] = _find(r'R([\d.]+)', line)
+                result["accel_travel"]  = _find(r'T([\d.]+)', line)
+
+            # M205 X<jerk_x> Y<jerk_y> Z<jerk_z> E<jerk_e>
+            if re.match(r'M205\b', line):
+                result["jerk_x"] = _find(r'X([\d.]+)', line)
+                result["jerk_y"] = _find(r'Y([\d.]+)', line)
+                result["jerk_z"] = _find(r'Z([\d.]+)', line)
+                result["jerk_e"] = _find(r'E([\d.]+)', line)
+
+        return result
+
+    def read_profiles(self) -> dict:
+        """
+        Query the printer with M503 and return a parsed profiles dict.
+        Falls back to individual M204 query if M503 returns no useful data.
+        """
+        lines = self.send_and_receive("M503", timeout=15.0)
+        profiles = self.parse_m503_profiles(lines)
+        # If M204 accel values are missing (some firmware omits them from M503)
+        if not profiles.get("accel_print"):
+            m204_lines = self.send_and_receive("M204", timeout=5.0)
+            profiles.update(self.parse_m503_profiles(m204_lines))
+        return profiles
+
+    def apply_profiles(self, profiles: dict) -> None:
+        """
+        Write the supplied profile values back to the printer.
+
+        Only keys that are present (not None) are sent.  Saves to EEPROM
+        with M500 at the end.
+        """
+        def _v(key):
+            v = profiles.get(key)
+            return None if v is None else float(v)
+
+        # M203 — max feed rates
+        m203_parts = ["M203"]
+        for axis, key in [("X", "max_feed_x"), ("Y", "max_feed_y"),
+                          ("Z", "max_feed_z"), ("E", "max_feed_e")]:
+            v = _v(key)
+            if v is not None:
+                m203_parts.append(f"{axis}{v:.2f}")
+        if len(m203_parts) > 1:
+            self._send_gcode(" ".join(m203_parts))
+
+        # M201 — max acceleration
+        m201_parts = ["M201"]
+        for axis, key in [("X", "max_accel_x"), ("Y", "max_accel_y"),
+                          ("Z", "max_accel_z"), ("E", "max_accel_e")]:
+            v = _v(key)
+            if v is not None:
+                m201_parts.append(f"{axis}{v:.2f}")
+        if len(m201_parts) > 1:
+            self._send_gcode(" ".join(m201_parts))
+
+        # M204 — print / retract / travel accel
+        m204_parts = ["M204"]
+        for param, key in [("P", "accel_print"), ("R", "accel_retract"), ("T", "accel_travel")]:
+            v = _v(key)
+            if v is not None:
+                m204_parts.append(f"{param}{v:.2f}")
+        if len(m204_parts) > 1:
+            self._send_gcode(" ".join(m204_parts))
+
+        # M205 — jerk
+        m205_parts = ["M205"]
+        for axis, key in [("X", "jerk_x"), ("Y", "jerk_y"),
+                          ("Z", "jerk_z"), ("E", "jerk_e")]:
+            v = _v(key)
+            if v is not None:
+                m205_parts.append(f"{axis}{v:.2f}")
+        if len(m205_parts) > 1:
+            self._send_gcode(" ".join(m205_parts))
+
+        # Save to EEPROM
+        self._send_gcode("M500")
+        logger.info("[MotionCtrl] Profiles applied and saved to EEPROM (M500).")
+
     def send_and_receive(self, command: str, timeout: float = 10.0) -> list[str]:
         """
         Send a raw G-code command and return all response lines as a list.
