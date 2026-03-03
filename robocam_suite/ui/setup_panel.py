@@ -582,23 +582,18 @@ class SetupPanel(QWidget):
         v1.addWidget(self._feed_xy)
         v1.addWidget(_row("max_feed_z", "Z:", 0, 50, step=0.5, dec=1,
                           suffix=" mm/s"))
-        v1.addWidget(_row("max_feed_e", "E:", 0, 200, step=1.0, dec=1,
-                          suffix=" mm/s"))
         outer.addWidget(sec1)
 
         # ---- Acceleration (M201 + M204) ----
-        sec2 = QGroupBox("Acceleration  (M201 max / M204 print\u2013travel\u2013retract, mm/s\u00b2)")
+        sec2 = QGroupBox("Acceleration  (M201 max / M204 travel, mm/s\u00b2)")
         v2 = QVBoxLayout(sec2)
         v2.setSpacing(2)
         self._accel_xy = _pair("max_accel_x", "max_accel_y", 0, 5000, step=50.0, dec=0,
                                suffix=" mm/s\u00b2")
-        self._accel_xy.setToolTip("Maximum XY acceleration (M201 X… Y…).")
+        self._accel_xy.setToolTip("Maximum XY acceleration (M201 X\u2026 Y\u2026).")
         v2.addWidget(self._accel_xy)
         v2.addWidget(_row("max_accel_z", "Max Z:",  0, 500,   step=5.0,  dec=0, suffix=" mm/s\u00b2"))
-        v2.addWidget(_row("max_accel_e", "Max E:",  0, 5000,  step=50.0, dec=0, suffix=" mm/s\u00b2"))
-        v2.addWidget(_row("accel_print",  "Print:",  0, 5000,  step=50.0, dec=0, suffix=" mm/s\u00b2"))
         v2.addWidget(_row("accel_travel", "Travel:", 0, 5000,  step=50.0, dec=0, suffix=" mm/s\u00b2"))
-        v2.addWidget(_row("accel_retract","Retract:",0, 5000,  step=50.0, dec=0, suffix=" mm/s\u00b2"))
         outer.addWidget(sec2)
 
         # ---- Jerk (M205) ----
@@ -609,7 +604,6 @@ class SetupPanel(QWidget):
         self._jerk_xy.setToolTip("XY jerk limit (M205 X… Y…).")
         v3.addWidget(self._jerk_xy)
         v3.addWidget(_row("jerk_z", "Z:", 0, 5,  step=0.1, dec=2))
-        v3.addWidget(_row("jerk_e", "E:", 0, 20, step=0.5, dec=1))
         outer.addWidget(sec3)
 
         return grp
@@ -635,10 +629,9 @@ class SetupPanel(QWidget):
 
         # Single rows
         single_keys = [
-            "max_feed_z", "max_feed_e",
-            "max_accel_z", "max_accel_e",
-            "accel_print", "accel_travel", "accel_retract",
-            "jerk_z", "jerk_e",
+            "max_feed_z",
+            "max_accel_z", "accel_travel",
+            "jerk_z",
         ]
         for key in single_keys:
             val = profiles.get(key)
@@ -700,10 +693,9 @@ class SetupPanel(QWidget):
                     profiles[ky] = widget.y_value()
 
             single_keys = [
-                "max_feed_z", "max_feed_e",
-                "max_accel_z", "max_accel_e",
-                "accel_print", "accel_travel", "accel_retract",
-                "jerk_z", "jerk_e",
+                "max_feed_z",
+                "max_accel_z", "accel_travel",
+                "jerk_z",
             ]
             for key in single_keys:
                 widget = self._profile_sliders.get(key)
