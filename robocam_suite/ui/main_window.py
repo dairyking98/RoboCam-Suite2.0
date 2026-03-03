@@ -75,7 +75,20 @@ class MainWindow(QMainWindow):
             print(f"[MainWindow] Hardware connect on startup: {e}")
 
     def closeEvent(self, event):
-        """Save session and disconnect hardware on close."""
+        """Gracefully stop all background threads, save session, then quit."""
+        # Stop experiment runner if running
+        exp = self.experiment_panel
+        if hasattr(exp, 'experiment_runner') and exp.experiment_runner and exp.experiment_runner.isRunning():
+            exp.experiment_runner.stop()
+            exp.experiment_runner.wait(5000)
+
+        # Stop frame grabbers
+        for panel in (self.calibration_panel, self.experiment_panel):
+            grabber = getattr(panel, '_grabber', None)
+            if grabber and grabber.isRunning():
+                grabber.stop()
+                grabber.wait(2000)
+
         session_manager.save_session()
         hw_manager.disconnect_all()
         event.accept()

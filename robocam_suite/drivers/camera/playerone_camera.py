@@ -338,6 +338,9 @@ class PlayerOneCamera(Camera):
         if frame.dtype != np.uint8:
             # 16-bit → 8-bit (scale to full range)
             frame = (frame >> 8).astype(np.uint8)
+        # Normalise to 2D greyscale if ImageDataConvert returned (H, W, 1)
+        if frame.ndim == 3 and frame.shape[2] == 1:
+            frame = frame[:, :, 0]
         if frame.ndim == 2:
             import cv2
             if self._is_mono:

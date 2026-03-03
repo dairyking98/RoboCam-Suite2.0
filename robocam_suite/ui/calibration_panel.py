@@ -366,14 +366,17 @@ class CalibrationPanel(QWidget):
             step_layout.addWidget(rb)
             if val == "1.0":
                 rb.setChecked(True)
-        step_layout.addWidget(QLabel("Custom:"))
+        # Custom radio button — selected automatically when user types a value
+        self._custom_rb = QRadioButton("Custom:")
+        self._custom_rb.setObjectName("step_custom")
+        self._step_btn_group.addButton(self._custom_rb, len(STEP_PRESETS))
+        step_layout.addWidget(self._custom_rb)
         self.step_size_input = QLineEdit("1.0")
         self.step_size_input.setFixedWidth(55)
         self.step_size_input.setToolTip("Enter any custom step size in mm.")
         step_layout.addWidget(self.step_size_input)
-        self._step_btn_group.buttonClicked.connect(
-            lambda btn: self.step_size_input.setText(btn.text())
-        )
+        # Clicking a preset radio → fill the text box with that value
+        self._step_btn_group.buttonClicked.connect(self._on_step_btn_clicked)
         self.step_size_input.textEdited.connect(self._on_custom_step_edited)
         layout.addWidget(step_grp, 4, 0, 1, 5)
 
@@ -746,12 +749,15 @@ class CalibrationPanel(QWidget):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _on_step_btn_clicked(self, btn):
+        """Preset radio clicked — update the text box unless it was the Custom button."""
+        if btn is not self._custom_rb:
+            self.step_size_input.setText(btn.text())
+            self._session.update_session("calibration", {"step_size": btn.text()})
+
     def _on_custom_step_edited(self, text: str):
-        checked = self._step_btn_group.checkedButton()
-        if checked and checked.text() != text:
-            self._step_btn_group.setExclusive(False)
-            checked.setChecked(False)
-            self._step_btn_group.setExclusive(True)
+        """User typed in the custom field — auto-select the Custom radio button."""
+        self._custom_rb.setChecked(True)
         self._session.update_session("calibration", {"step_size": text})
 
     def _update_position_display(self):
@@ -775,10 +781,14 @@ class CalibrationPanel(QWidget):
         s = self._session.get_session("calibration")
         step = s.get("step_size", "1.0")
         self.step_size_input.setText(step)
+        matched = False
         for btn in self._step_btn_group.buttons():
-            if btn.text() == step:
+            if btn is not self._custom_rb and btn.text() == step:
                 btn.setChecked(True)
+                matched = True
                 break
+        if not matched:
+            self._custom_rb.setChecked(True)
         self.cols_spin.setValue(int(s.get("cols", 12)))
         self.rows_spin.setValue(int(s.get("rows", 8)))
         saved_corners = s.get("corners", {})
