@@ -80,3 +80,32 @@ class WellPlate:
 
     def get_path(self) -> List[Tuple[float, float, float]]:
         return self.path
+
+    def get_path_with_labels(self) -> List[Tuple[str, Tuple[float, float, float]]]:
+        """
+        Return the ordered path as ``(label, position)`` pairs where
+        ``label`` uses standard well-plate notation: row letter (A, B, …)
+        and 1-based column number (1, 2, …).  For example the first well
+        in row 0, column 0 is ``'A1'``; row 1 column 2 is ``'B3'``.
+
+        For plates with more than 26 rows the row label wraps to two
+        letters (AA, AB, …) following the same convention as spreadsheet
+        column headers.
+        """
+        def _row_label(i: int) -> str:
+            label = ""
+            i += 1  # 1-based
+            while i > 0:
+                i, rem = divmod(i - 1, 26)
+                label = chr(ord('A') + rem) + label
+            return label
+
+        result: List[Tuple[str, Tuple[float, float, float]]] = []
+        for row_i in range(self.depth):
+            cols = range(self.width)
+            if self.pattern == self.PATTERN_SNAKE and row_i % 2 == 1:
+                cols = range(self.width - 1, -1, -1)
+            for col_j in cols:
+                label = f"{_row_label(row_i)}{col_j + 1}"
+                result.append((label, self._interpolate(row_i, col_j)))
+        return result

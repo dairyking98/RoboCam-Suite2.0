@@ -163,21 +163,22 @@ class Experiment:
             logger.info("[Experiment] GPIO disabled — laser commands silently ignored.")
 
         # Build the ordered well list respecting the selected subset
-        full_path = self.well_plate.get_path()
+        full_labeled = self.well_plate.get_path_with_labels()
         selected  = self.params.get("selected_well_indices", None)
         if selected is not None:
-            path_to_run = [(idx, full_path[idx]) for idx in selected if idx < len(full_path)]
+            path_to_run = [(full_labeled[idx][0], full_labeled[idx][1])
+                           for idx in selected if idx < len(full_labeled)]
         else:
-            path_to_run = list(enumerate(full_path))
+            path_to_run = full_labeled
         logger.info(f"[Experiment] Visiting {len(path_to_run)} wells.")
 
         try:
-            for well_num, (path_idx, position) in enumerate(path_to_run):
+            for well_num, (well_id, position) in enumerate(path_to_run):
                 if self._stop_requested:
                     logger.info("[Experiment] Stop requested — halting.")
                     break
 
-                well_label = f"well_{path_idx + 1:03d}"
+                well_label = f"well_{well_id}"
                 logger.info(
                     f"[{well_num + 1}/{len(path_to_run)}] {well_label} → "
                     f"X:{position[0]:.2f} Y:{position[1]:.2f} Z:{position[2]:.2f}"

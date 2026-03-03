@@ -246,25 +246,54 @@ class GCodeSerialMotionController(MotionController):
         """
         Block until all queued moves are complete.
 
-        Strategy: flush any stale bytes from the input buffer (temperature
-        reports, unsolicited status lines, etc.) then send M400.  If the
-        first attempt times out — which can happen when Marlin's output
-        buffer fills up and the 'ok' is delayed — flush again and retry
-        once before raising.
+        Strategy: poll M114 every 200 ms and compare the returned position
+        against the last two readings.  Once the position has been stable
+        (unchanged within 0.05 mm) for two consecutive polls the move is
+        considered finished.  This avoids the M400 approach entirely, which
+        is unreliable on Marlin because the 'ok' response can be delayed or
+        lost when the serial output buffer fills with temperature reports.
+
+        Falls back to a simple time.sleep() if the serial port is not open
+        (simulation mode is handled separately in _send_gcode).
         """
-        timeout = self._config.get("movement_wait_timeout", 30.0)
-        # Flush stale input so we don't mistake an old 'ok' for M400's ack
-        if self._serial_port:
-            self._serial_port.reset_input_buffer()
-        try:
-            self._send_gcode("M400", timeout=timeout)
-        except TimeoutError:
-            logger.warning(
-                "[MotionCtrl] M400 timed out — flushing buffer and retrying once."
-            )
-            if self._serial_port:
-                self._serial_port.reset_input_buffer()
-            self._send_gcode("M400", timeout=timeout)
+        if self._simulate:
+            # SimulatedPrinter handles timing internally; just sync position.
+            return
+
+        timeout  = float(self._config.get("movement_wait_timeout", 30.0))
+        interval = 0.2   # seconds between M114 polls
+        tol      = 0.05  # mm — positions within this are considered equal
+
+        deadline = time.time() + timeout
+        prev_pos: Optional[Tuple[float, float, float]] = None
+        stable_count = 0
+
+        while time.time() < deadline:
+            try:
+                # get_current_position() sends M114 and parses the response
+                pos = self.get_current_position()
+            except Exception:
+                time.sleep(interval)
+                continue
+
+            if prev_pos is not None:
+                dx = abs(pos[0] - prev_pos[0])
+                dy = abs(pos[1] - prev_pos[1])
+                dz = abs(pos[2] - prev_pos[2])
+                if dx < tol and dy < tol and dz < tol:
+                    stable_count += 1
+                    if stable_count >= 2:
+                        return  # position stable — move complete
+                else:
+                    stable_count = 0
+
+            prev_pos = pos
+            time.sleep(interval)
+
+        logger.warning(
+            "[MotionCtrl] Movement wait timed out after %.0f s — "
+            "continuing anyway.", timeout
+        )
 
     def _sync_position(self) -> None:
         """Update the cached position from the printer."""
