@@ -106,6 +106,14 @@ class GCodeSerialMotionController(MotionController):
         # be processing its boot sequence when connect() returns.
         logger.info("[MotionCtrl] M400 support will be tested on first move.")
 
+        # Sync position cache from printer on connect so we start from the
+        # correct position (not 0,0,0) — identical to 1.0 update_current_position().
+        try:
+            self.query_current_position()
+            logger.info(f"[MotionCtrl] Position synced on connect: {self._position}")
+        except Exception as e:
+            logger.warning(f"[MotionCtrl] Could not sync position on connect: {e}")
+
     def disconnect(self) -> None:
         if self._simulate:
             logger.info("[MotionCtrl] Simulated printer disconnected.")
@@ -124,6 +132,12 @@ class GCodeSerialMotionController(MotionController):
     def home(self) -> None:
         self._send_gcode("G28", timeout=self._config.get("home_timeout", 90.0))
         self._wait_for_movement_to_finish()
+        # Sync position cache after homing so the display and experiment
+        # moves use the correct post-home coordinates.
+        try:
+            self.query_current_position()
+        except Exception as e:
+            logger.warning(f"[MotionCtrl] Could not sync position after home: {e}")
 
     def move_absolute(
         self,
