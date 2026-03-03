@@ -124,7 +124,6 @@ class GCodeSerialMotionController(MotionController):
     def home(self) -> None:
         self._send_gcode("G28", timeout=self._config.get("home_timeout", 90.0))
         self._wait_for_movement_to_finish()
-        self._sync_position()
 
     def move_absolute(
         self,
@@ -296,7 +295,6 @@ class GCodeSerialMotionController(MotionController):
             parts.append(f"F{speed:.1f}")
         self._send_gcode(" ".join(parts))
         self._wait_for_movement_to_finish()
-        self._sync_position()
 
     def _wait_for_movement_to_finish(self) -> None:
         """
