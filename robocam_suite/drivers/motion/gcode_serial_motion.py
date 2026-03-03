@@ -47,6 +47,11 @@ class GCodeSerialMotionController(MotionController):
         self._serial_port: Optional[serial.Serial] = None
         self._position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
 
+        # Live motion profiles — populated by the UI via set_profiles().
+        # _move() uses max_feed_x/y/z as the default F value when no explicit
+        # speed is passed, so slider changes take effect immediately.
+        self._profiles: dict = {}
+
         # command_delay: short pause after writing a command so the printer
         # has time to start processing before we begin reading the response.
         self._command_delay: float = float(self._config.get("command_delay", 0.05))
@@ -192,6 +197,16 @@ class GCodeSerialMotionController(MotionController):
                 float(match.group(3)),
             )
         return self._position
+
+    def set_profiles(self, profiles: dict) -> None:
+        """
+        Store the current motion profiles so that ``_move()`` can use them
+        as default feed-rates when no explicit speed is passed.
+
+        Called by the UI after reading or applying profiles.
+        """
+        self._profiles = dict(profiles)
+        logger.info(f"[MotionCtrl] Motion profiles updated: {profiles}")
 
     def send_raw(self, command: str) -> str:
         """
@@ -480,8 +495,25 @@ class GCodeSerialMotionController(MotionController):
             parts.append(f"Y{y:.4f}")
         if z is not None:
             parts.append(f"Z{z:.4f}")
+
+        # Determine feed rate (F) to include in the command.
+        # Priority: explicit speed arg > profile-derived speed > omit (firmware default).
         if speed is not None:
-            parts.append(f"F{speed:.1f}")
+            effective_speed = speed
+        else:
+            # Choose the profile feed rate relevant to the axes being moved.
+            # Convert mm/s → mm/min (G-code F units).
+            if z is not None and x is None and y is None:
+                # Pure Z move — use max_feed_z
+                mf = self._profiles.get("max_feed_z")
+            else:
+                # XY (or combined) move — use max_feed_x (X=Y are paired)
+                mf = self._profiles.get("max_feed_x")
+            effective_speed = float(mf) * 60.0 if mf is not None else None
+
+        if effective_speed is not None:
+            parts.append(f"F{effective_speed:.1f}")
+
         self._send_gcode(" ".join(parts))
         self._wait_for_movement_to_finish()
 

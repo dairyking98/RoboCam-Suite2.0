@@ -510,38 +510,40 @@ class SetupPanel(QWidget):
         return grp
 
     def _build_printer_profiles_group(self) -> QGroupBox:
-        """Feed-rate, acceleration, and jerk profile editor."""
+        """Feed-rate, acceleration, and jerk profile editor with sliders."""
+        from robocam_suite.ui.profile_slider import ProfileSliderRow, ProfileSliderPair
+
         grp = QGroupBox("3-D Printer \u2014 Motion Profiles")
         grp.setToolTip(
             "Read the current feed-rate, acceleration, and jerk settings from\n"
-            "the printer (via M503), edit them, then Apply to write them back.\n"
-            "Default values shown are the firmware defaults read at last 'Read'.\n"
-            "Reset restores the last-read values without sending anything."
+            "the printer (via M503), edit them with the sliders, then Apply.\n"
+            "The orange triangle on each slider marks the firmware default.\n"
+            "X and Y are paired; check \u2018Link X=Y\u2019 to move them together."
         )
         outer = QVBoxLayout(grp)
-        outer.setSpacing(4)
+        outer.setSpacing(6)
 
         # ---- action buttons row ----
         btn_row = QHBoxLayout()
         self._profiles_read_btn = QPushButton("Read from Printer")
         self._profiles_read_btn.setToolTip(
-            "Query M503 and populate all fields with the current printer values.\n"
-            "The printer must be connected."
+            "Query M503 and populate all sliders with the current printer values.\n"
+            "Also called automatically when the printer connects."
         )
         self._profiles_read_btn.clicked.connect(self._read_profiles)
         btn_row.addWidget(self._profiles_read_btn)
 
         self._profiles_apply_btn = QPushButton("Apply to Printer")
         self._profiles_apply_btn.setToolTip(
-            "Send M203/M201/M204/M205 with the current field values\n"
+            "Send M203/M201/M204/M205 with the current slider values\n"
             "and save to EEPROM (M500)."
         )
         self._profiles_apply_btn.clicked.connect(self._apply_profiles)
         btn_row.addWidget(self._profiles_apply_btn)
 
-        self._profiles_reset_btn = QPushButton("Reset to Read Values")
+        self._profiles_reset_btn = QPushButton("Reset to Defaults")
         self._profiles_reset_btn.setToolTip(
-            "Restore all fields to the values last read from the printer\n"
+            "Restore all sliders to the values last read from the printer\n"
             "without sending any commands."
         )
         self._profiles_reset_btn.clicked.connect(self._reset_profiles)
@@ -549,91 +551,106 @@ class SetupPanel(QWidget):
         outer.addLayout(btn_row)
 
         # ---- status label ----
-        self._profiles_status = QLabel("Not read \u2014 click \u2018Read from Printer\u2019 to populate.")
+        self._profiles_status = QLabel(
+            "Not read \u2014 connect the printer or click \u2018Read from Printer\u2019."
+        )
         self._profiles_status.setStyleSheet("font-size: 10px; color: #888; font-style: italic;")
         outer.addWidget(self._profiles_status)
 
-        # ---- helper to make a labelled double spinbox ----
-        self._profile_spinboxes: dict = {}   # key -> QDoubleSpinBox
-        self._profile_defaults: dict = {}    # key -> float (last-read value)
+        # Storage
+        self._profile_sliders: dict = {}   # key -> ProfileSliderRow or ProfileSliderPair
+        self._profile_defaults: dict = {}  # key -> float
 
-        def _dspin(key, lo, hi, step, decimals, suffix, tooltip):
-            sb = QDoubleSpinBox()
-            sb.setRange(lo, hi)
-            sb.setSingleStep(step)
-            sb.setDecimals(decimals)
-            sb.setSuffix(suffix)
-            sb.setToolTip(tooltip)
-            sb.setEnabled(False)   # disabled until values are read
-            self._profile_spinboxes[key] = sb
-            return sb
+        def _row(key, label, lo, hi, step=1.0, dec=1, suffix=" mm/s"):
+            r = ProfileSliderRow(label, lo, hi, step=step, decimals=dec, suffix=suffix)
+            r.setEnabled(False)
+            self._profile_sliders[key] = r
+            return r
 
-        grid = QGridLayout()
-        grid.setSpacing(4)
-        col = 0   # track column pairs
+        def _pair(key_x, key_y, lo, hi, step=1.0, dec=1, suffix=" mm/s"):
+            p = ProfileSliderPair(lo, hi, step=step, decimals=dec, suffix=suffix)
+            p.setEnabled(False)
+            self._profile_sliders[key_x] = p   # pair stored under x key
+            self._profile_sliders["__pair_" + key_x] = key_y  # marker
+            return p
 
-        def _add_row(layout, row, label_text, key, lo, hi, step, dec, suffix, tip):
-            lbl = QLabel(label_text)
-            lbl.setToolTip(tip)
-            layout.addWidget(lbl, row, 0)
-            sb = _dspin(key, lo, hi, step, dec, suffix, tip)
-            layout.addWidget(sb, row, 1)
-
-        # ---- Section: Max Feed Rates (M203) ----
+        # ---- Max Feed Rates (M203) ----
         sec1 = QGroupBox("Max Feed Rates  (M203, mm/s)")
-        g1 = QGridLayout(sec1)
-        g1.setSpacing(3)
-        for r, (lbl, key, lo, hi) in enumerate([
-            ("X", "max_feed_x", 0, 2000),
-            ("Y", "max_feed_y", 0, 2000),
-            ("Z", "max_feed_z", 0, 100),
-            ("E", "max_feed_e", 0, 500),
-        ]):
-            g1.addWidget(QLabel(f"{lbl}:"), r, 0)
-            sb = _dspin(key, lo, hi, 1.0, 2, " mm/s",
-                        f"Maximum feed rate for the {lbl} axis (M203 {lbl}<value>).")
-            g1.addWidget(sb, r, 1)
+        v1 = QVBoxLayout(sec1)
+        v1.setSpacing(2)
+        self._feed_xy = _pair("max_feed_x", "max_feed_y", 0, 2000, step=5.0, dec=1)
+        self._feed_xy.setToolTip("Maximum XY feed rate (M203 X… Y…).")
+        v1.addWidget(self._feed_xy)
+        v1.addWidget(_row("max_feed_z", "Z:", 0, 50, step=0.5, dec=1,
+                          suffix=" mm/s"))
+        v1.addWidget(_row("max_feed_e", "E:", 0, 200, step=1.0, dec=1,
+                          suffix=" mm/s"))
         outer.addWidget(sec1)
 
-        # ---- Section: Acceleration (M201 + M204) ----
-        sec2 = QGroupBox("Acceleration  (M201 max / M204 print–travel–retract, mm/s\u00b2)")
-        g2 = QGridLayout(sec2)
-        g2.setSpacing(3)
-        for r, (lbl, key, lo, hi) in enumerate([
-            ("Max X",      "max_accel_x",   0, 10000),
-            ("Max Y",      "max_accel_y",   0, 10000),
-            ("Max Z",      "max_accel_z",   0, 1000),
-            ("Max E",      "max_accel_e",   0, 10000),
-            ("Print",      "accel_print",   0, 10000),
-            ("Travel",     "accel_travel",  0, 10000),
-            ("Retract",    "accel_retract", 0, 10000),
-        ]):
-            g2.addWidget(QLabel(f"{lbl}:"), r, 0)
-            sb = _dspin(key, lo, hi, 10.0, 2, " mm/s\u00b2",
-                        f"{lbl} acceleration setting.")
-            g2.addWidget(sb, r, 1)
+        # ---- Acceleration (M201 + M204) ----
+        sec2 = QGroupBox("Acceleration  (M201 max / M204 print\u2013travel\u2013retract, mm/s\u00b2)")
+        v2 = QVBoxLayout(sec2)
+        v2.setSpacing(2)
+        self._accel_xy = _pair("max_accel_x", "max_accel_y", 0, 5000, step=50.0, dec=0,
+                               suffix=" mm/s\u00b2")
+        self._accel_xy.setToolTip("Maximum XY acceleration (M201 X… Y…).")
+        v2.addWidget(self._accel_xy)
+        v2.addWidget(_row("max_accel_z", "Max Z:",  0, 500,   step=5.0,  dec=0, suffix=" mm/s\u00b2"))
+        v2.addWidget(_row("max_accel_e", "Max E:",  0, 5000,  step=50.0, dec=0, suffix=" mm/s\u00b2"))
+        v2.addWidget(_row("accel_print",  "Print:",  0, 5000,  step=50.0, dec=0, suffix=" mm/s\u00b2"))
+        v2.addWidget(_row("accel_travel", "Travel:", 0, 5000,  step=50.0, dec=0, suffix=" mm/s\u00b2"))
+        v2.addWidget(_row("accel_retract","Retract:",0, 5000,  step=50.0, dec=0, suffix=" mm/s\u00b2"))
         outer.addWidget(sec2)
 
-        # ---- Section: Jerk (M205) ----
+        # ---- Jerk (M205) ----
         sec3 = QGroupBox("Jerk  (M205, mm/s)")
-        g3 = QGridLayout(sec3)
-        g3.setSpacing(3)
-        for r, (lbl, key, lo, hi, step) in enumerate([
-            ("X", "jerk_x", 0, 50, 0.5),
-            ("Y", "jerk_y", 0, 50, 0.5),
-            ("Z", "jerk_z", 0, 10, 0.1),
-            ("E", "jerk_e", 0, 50, 0.5),
-        ]):
-            g3.addWidget(QLabel(f"{lbl}:"), r, 0)
-            sb = _dspin(key, lo, hi, step, 2, " mm/s",
-                        f"Jerk limit for the {lbl} axis (M205 {lbl}<value>).")
-            g3.addWidget(sb, r, 1)
+        v3 = QVBoxLayout(sec3)
+        v3.setSpacing(2)
+        self._jerk_xy = _pair("jerk_x", "jerk_y", 0, 30, step=0.5, dec=1)
+        self._jerk_xy.setToolTip("XY jerk limit (M205 X… Y…).")
+        v3.addWidget(self._jerk_xy)
+        v3.addWidget(_row("jerk_z", "Z:", 0, 5,  step=0.1, dec=2))
+        v3.addWidget(_row("jerk_e", "E:", 0, 20, step=0.5, dec=1))
         outer.addWidget(sec3)
 
         return grp
 
+    def _populate_profiles(self, profiles: dict):
+        """Internal: fill sliders from a profiles dict and mark defaults."""
+        from robocam_suite.ui.profile_slider import ProfileSliderPair
+        self._profile_defaults = dict(profiles)
+
+        # Pairs: max_feed_x/y, max_accel_x/y, jerk_x/y
+        pairs = [
+            ("max_feed_x",  "max_feed_y",  self._feed_xy),
+            ("max_accel_x", "max_accel_y", self._accel_xy),
+            ("jerk_x",      "jerk_y",      self._jerk_xy),
+        ]
+        for kx, ky, widget in pairs:
+            vx = profiles.get(kx)
+            vy = profiles.get(ky)
+            if vx is not None and vy is not None:
+                widget.set_values(float(vx), float(vy))
+                widget.set_defaults(float(vx), float(vy))
+                widget.setEnabled(True)
+
+        # Single rows
+        single_keys = [
+            "max_feed_z", "max_feed_e",
+            "max_accel_z", "max_accel_e",
+            "accel_print", "accel_travel", "accel_retract",
+            "jerk_z", "jerk_e",
+        ]
+        for key in single_keys:
+            val = profiles.get(key)
+            widget = self._profile_sliders.get(key)
+            if val is not None and widget is not None:
+                widget.set_value(float(val))
+                widget.set_default(float(val))
+                widget.setEnabled(True)
+
     def _read_profiles(self):
-        """Query M503, populate spinboxes, and store defaults."""
+        """Query M503, populate sliders, and store defaults."""
         try:
             mc = self._hw.get_motion_controller()
             if not mc.is_connected:
@@ -651,32 +668,52 @@ class SetupPanel(QWidget):
             self._profiles_status.setStyleSheet("font-size: 10px; color: orange;")
             return
 
-        self._profile_defaults = dict(profiles)
-        for key, sb in self._profile_spinboxes.items():
-            val = profiles.get(key)
-            if val is not None:
-                sb.setValue(float(val))
-                sb.setEnabled(True)
-
+        self._populate_profiles(profiles)
+        # Push profiles into the motion controller so moves use the new feed rates.
+        try:
+            mc.set_profiles(profiles)
+        except Exception:
+            pass
         self._profiles_status.setText(
-            "Values read from printer. Edit and click \u2018Apply to Printer\u2019 to save."
+            "Values read from printer. Adjust sliders and click \u2018Apply to Printer\u2019."
         )
         self._profiles_status.setStyleSheet("font-size: 10px; color: green;")
 
     def _apply_profiles(self):
-        """Send current spinbox values to the printer."""
+        """Send current slider values to the printer."""
         try:
             mc = self._hw.get_motion_controller()
             if not mc.is_connected:
                 self._profiles_status.setText("Error: printer not connected.")
                 self._profiles_status.setStyleSheet("font-size: 10px; color: red;")
                 return
-            profiles = {
-                key: sb.value()
-                for key, sb in self._profile_spinboxes.items()
-                if sb.isEnabled()
-            }
+
+            # Collect values from pairs and single rows
+            profiles: dict = {}
+            pairs = [
+                ("max_feed_x",  "max_feed_y",  self._feed_xy),
+                ("max_accel_x", "max_accel_y", self._accel_xy),
+                ("jerk_x",      "jerk_y",      self._jerk_xy),
+            ]
+            for kx, ky, widget in pairs:
+                if widget.isEnabled():
+                    profiles[kx] = widget.x_value()
+                    profiles[ky] = widget.y_value()
+
+            single_keys = [
+                "max_feed_z", "max_feed_e",
+                "max_accel_z", "max_accel_e",
+                "accel_print", "accel_travel", "accel_retract",
+                "jerk_z", "jerk_e",
+            ]
+            for key in single_keys:
+                widget = self._profile_sliders.get(key)
+                if widget is not None and widget.isEnabled():
+                    profiles[key] = widget.value()
+
             mc.apply_profiles(profiles)
+            # Keep the in-memory profiles in sync.
+            mc.set_profiles(profiles)
             self._profiles_status.setText("Profiles applied and saved to EEPROM (M500).")
             self._profiles_status.setStyleSheet("font-size: 10px; color: green;")
         except Exception as e:
@@ -684,15 +721,12 @@ class SetupPanel(QWidget):
             self._profiles_status.setStyleSheet("font-size: 10px; color: red;")
 
     def _reset_profiles(self):
-        """Restore spinboxes to the last-read values."""
+        """Restore sliders to the last-read values."""
         if not self._profile_defaults:
             self._profiles_status.setText("Nothing to reset \u2014 read from printer first.")
             self._profiles_status.setStyleSheet("font-size: 10px; color: orange;")
             return
-        for key, sb in self._profile_spinboxes.items():
-            val = self._profile_defaults.get(key)
-            if val is not None:
-                sb.setValue(float(val))
+        self._populate_profiles(self._profile_defaults)
         self._profiles_status.setText("Reset to last-read values.")
         self._profiles_status.setStyleSheet("font-size: 10px; color: #888;")
 
@@ -1006,6 +1040,11 @@ class SetupPanel(QWidget):
         try:
             self._hw.get_motion_controller().connect()
             logger.info("[Setup] Printer reconnected successfully.")
+            # Auto-read motion profiles now that the printer is connected.
+            try:
+                self._read_profiles()
+            except Exception as pe:
+                logger.warning(f"[Setup] Auto-read profiles after connect failed: {pe}")
         except Exception as e:
             logger.error(f"[Setup] Printer reconnect failed: {e}")
         self._refresh_status()
@@ -1048,6 +1087,12 @@ class SetupPanel(QWidget):
         except Exception as e:
             logger.error(f"Connect all failed: {e}")
         self._refresh_status()
+        # Auto-read motion profiles if the printer is now connected.
+        try:
+            if self._hw.get_motion_controller().is_connected:
+                self._read_profiles()
+        except Exception as pe:
+            logger.warning(f"[Setup] Auto-read profiles after connect-all failed: {pe}")
 
     def _disconnect_all(self):
         self._hw.disconnect_all()
