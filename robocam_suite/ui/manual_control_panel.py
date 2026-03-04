@@ -3,7 +3,8 @@ Manual Control Panel — direct hardware control outside of an experiment.
 """
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QGridLayout, QLabel, QGroupBox,
+    QGridLayout, QLabel, QGroupBox, QLineEdit, QTextEdit,
+    QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer
 from robocam_suite.hw_manager import hw_manager
@@ -22,6 +23,7 @@ class ManualControlPanel(QWidget):
 
         root.addWidget(self._build_general_group())
         root.addWidget(self._build_laser_group())
+        root.addWidget(self._build_gcode_group())
         root.addWidget(self._build_status_group())
         root.addWidget(QuickCaptureWidget("Quick Capture"))
         root.addStretch()
@@ -86,6 +88,34 @@ class ManualControlPanel(QWidget):
 
         return grp
 
+    def _build_gcode_group(self) -> QGroupBox:
+        grp = QGroupBox("Manual G-code Sender")
+        layout = QVBoxLayout(grp)
+
+        input_row = QHBoxLayout()
+        self.gcode_input = QLineEdit()
+        self.gcode_input.setPlaceholderText("Enter G-code (e.g. G0 X10, M114, M503)...")
+        self.gcode_input.returnPressed.connect(self._send_custom_gcode)
+        input_row.addWidget(self.gcode_input)
+
+        send_btn = QPushButton("Send")
+        send_btn.clicked.connect(self._send_custom_gcode)
+        input_row.addWidget(send_btn)
+
+        clear_btn = QPushButton("Clear Log")
+        clear_btn.clicked.connect(lambda: self.gcode_log.clear())
+        input_row.addWidget(clear_btn)
+        layout.addLayout(input_row)
+
+        self.gcode_log = QTextEdit()
+        self.gcode_log.setReadOnly(True)
+        self.gcode_log.setFont(self.gcode_log.font().__class__("Courier New", 9))
+        self.gcode_log.setMinimumHeight(100)
+        self.gcode_log.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self.gcode_log)
+
+        return grp
+
     def _build_status_group(self) -> QGroupBox:
         grp = QGroupBox("Hardware Status")
         layout = QGridLayout(grp)
@@ -94,15 +124,20 @@ class ManualControlPanel(QWidget):
         self.mc_status_label = QLabel("Disconnected")
         layout.addWidget(self.mc_status_label, 0, 1)
 
-        layout.addWidget(QLabel("Camera:"), 1, 0)
-        self.cam_status_label = QLabel("Disconnected")
-        layout.addWidget(self.cam_status_label, 1, 1)
+        layout.addWidget(QLabel("Current Position:"), 1, 0)
+        self.pos_label = QLabel("X: 0.00  Y: 0.00  Z: 0.00")
+        self.pos_label.setStyleSheet("font-family: monospace; font-weight: bold;")
+        layout.addWidget(self.pos_label, 1, 1)
 
-        layout.addWidget(QLabel("GPIO / Arduino:"), 2, 0)
+        layout.addWidget(QLabel("Camera:"), 2, 0)
+        self.cam_status_label = QLabel("Disconnected")
+        layout.addWidget(self.cam_status_label, 2, 1)
+
+        layout.addWidget(QLabel("GPIO / Arduino:"), 3, 0)
         gpio_enabled = self.hw_manager.gpio_enabled
         self.gpio_status_label = QLabel("Disabled" if not gpio_enabled else "Disconnected")
         self.gpio_status_label.setStyleSheet("color: gray" if not gpio_enabled else "color: red")
-        layout.addWidget(self.gpio_status_label, 2, 1)
+        layout.addWidget(self.gpio_status_label, 3, 1)
 
         return grp
 
@@ -131,15 +166,52 @@ class ManualControlPanel(QWidget):
         except Exception as e:
             print(f"[ManualControl] Laser error: {e}")
 
+    def _send_custom_gcode(self):
+        cmd = self.gcode_input.text().strip()
+        if not cmd:
+            return
+        self.gcode_input.clear()
+        try:
+            mc = self.hw_manager.get_motion_controller()
+            if not mc.is_connected:
+                self.gcode_log.append("[Error] Printer not connected.")
+                return
+            
+            # Use the low-level send_and_receive if available, else send_raw
+            if hasattr(mc, "send_and_receive"):
+                response_lines = mc.send_and_receive(cmd)
+                self.gcode_log.append(f">>> {cmd}")
+                for line in response_lines:
+                    self.gcode_log.append(f"    {line}")
+            else:
+                response = mc.send_raw(cmd)
+                self.gcode_log.append(f">>> {cmd}")
+                if response:
+                    for line in response.splitlines():
+                        self.gcode_log.append(f"    {line}")
+            self.gcode_log.append("")
+            
+            # If the command was a move or home, sync position
+            if any(c in cmd.upper() for c in ("G0", "G1", "G28", "G92")):
+                mc.query_current_position()
+        except Exception as e:
+            self.gcode_log.append(f"[Error] {e}")
+
     # ------------------------------------------------------------------
     # Status refresh
     # ------------------------------------------------------------------
 
     def _refresh_status(self):
         try:
-            ok = self.hw_manager.get_motion_controller().is_connected
+            mc = self.hw_manager.get_motion_controller()
+            ok = mc.is_connected
             self.mc_status_label.setText("Connected" if ok else "Disconnected")
             self.mc_status_label.setStyleSheet("color: green" if ok else "color: red")
+            
+            if ok:
+                # Poll live position from the printer
+                pos = mc.query_current_position()
+                self.pos_label.setText(f"X: {pos[0]:.2f}  Y: {pos[1]:.2f}  Z: {pos[2]:.2f}")
         except Exception:
             pass
 

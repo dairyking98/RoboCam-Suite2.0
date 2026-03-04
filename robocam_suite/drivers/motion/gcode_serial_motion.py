@@ -189,12 +189,17 @@ class GCodeSerialMotionController(MotionController):
             return self._position
 
         response = self._send_gcode("M114", read_response=True)
-        match = re.search(r"X:([\d.]+)\s+Y:([\d.]+)\s+Z:([\d.]+)", response)
-        if match:
+        # Robust regex: handles 'X:10.0', 'X: 10.0', and extra fields like 'Count X:...'
+        # Pattern: look for X: followed by optional space and a float
+        match_x = re.search(r"X:\s*(-?[\d.]+)", response)
+        match_y = re.search(r"Y:\s*(-?[\d.]+)", response)
+        match_z = re.search(r"Z:\s*(-?[\d.]+)", response)
+        
+        if match_x and match_y and match_z:
             self._position = (
-                float(match.group(1)),
-                float(match.group(2)),
-                float(match.group(3)),
+                float(match_x.group(1)),
+                float(match_y.group(1)),
+                float(match_z.group(1)),
             )
         return self._position
 
