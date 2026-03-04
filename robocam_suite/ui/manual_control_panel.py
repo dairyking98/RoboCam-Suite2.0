@@ -178,14 +178,13 @@ class ManualControlPanel(QWidget):
                 return
             
             # Use the low-level send_and_receive if available, else send_raw
+            self.gcode_log.append(f">>> {cmd}")
             if hasattr(mc, "send_and_receive"):
                 response_lines = mc.send_and_receive(cmd)
-                self.gcode_log.append(f">>> {cmd}")
                 for line in response_lines:
                     self.gcode_log.append(f"    {line}")
             else:
                 response = mc.send_raw(cmd)
-                self.gcode_log.append(f">>> {cmd}")
                 if response:
                     for line in response.splitlines():
                         self.gcode_log.append(f"    {line}")
@@ -194,6 +193,7 @@ class ManualControlPanel(QWidget):
             # If the command was a move or home, sync position
             if any(c in cmd.upper() for c in ("G0", "G1", "G28", "G92")):
                 mc.query_current_position()
+                self._refresh_status()
         except Exception as e:
             self.gcode_log.append(f"[Error] {e}")
 

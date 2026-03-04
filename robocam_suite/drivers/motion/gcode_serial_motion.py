@@ -447,7 +447,8 @@ class GCodeSerialMotionController(MotionController):
         """
         if self._simulate:
             response = self._sim_printer.send(command)
-            logger.debug(f"[SimPrinter ←] {command!r}  →  {response!r}")
+            logger.debug(f">>> {command}")
+            logger.debug(f"Printer response: {response.strip()}")
             return response
 
         if not self.is_connected:
@@ -456,7 +457,7 @@ class GCodeSerialMotionController(MotionController):
         if timeout is None:
             timeout = float(self._config.get("serial_timeout", 10.0))
 
-        logger.info(f"[GCode TX] {command!r}")
+        logger.info(f">>> {command}")
         self._serial_port.write((command + "\n").encode("utf-8"))
         self._serial_port.flush()                     # drain OS buffer immediately
         time.sleep(self._command_delay)               # let printer start processing
@@ -475,9 +476,9 @@ class GCodeSerialMotionController(MotionController):
                 raw = self._serial_port.readline()
                 line = raw.decode("utf-8", errors="replace").strip()
                 if line:
-                    logger.info(f"[GCode RX] {line!r}")
+                    logger.debug(f"Printer response: {line}")
                     lines.append(line)
-                    if line.lower().startswith("ok"):
+                    if line.lower().startswith("ok") or "ok" in line.lower():
                         break
                     if line.lower().startswith("error"):
                         raise RuntimeError(f"Printer error: {line}")
@@ -545,39 +546,40 @@ class GCodeSerialMotionController(MotionController):
             # Lazy test on first move — identical to 1.0 behaviour.
             # The printer has had time to boot by now (first move is always
             # issued well after connect()).
-            logger.info("[MotionCtrl] Testing M400 support on first move...")
+            logger.info("Testing M400 support on first move...")
             try:
                 self._send_gcode("M400", timeout=5.0)
                 self._m400_supported = True
-                logger.info("[MotionCtrl] M400 supported — will use for movement completion.")
+                logger.info("M400 wait command supported (firmware supports movement completion detection)")
                 return
             except (TimeoutError, RuntimeError) as e:
                 self._m400_supported = False
                 logger.warning(
-                    f"[MotionCtrl] M400 not supported or timed out ({e}). "
+                    f"M400 not supported or timed out ({e}). "
                     "Switching to delay-based fallback."
                 )
             except Exception as e:
                 self._m400_supported = False
-                logger.warning(f"[MotionCtrl] M400 test error: {e}. Using fallback.")
+                logger.warning(f"M400 test error: {e}. Using fallback.")
 
         if self._m400_supported:
             try:
+                logger.info("Waiting for move completion (M400)...")
                 self._send_gcode("M400", timeout=timeout)
                 return
             except (TimeoutError, RuntimeError) as e:
                 logger.warning(
-                    f"[MotionCtrl] M400 failed during move ({e}). "
+                    f"M400 failed during move ({e}). "
                     "Marking M400 as unsupported — switching to delay fallback."
                 )
                 self._m400_supported = False
             except Exception as e:
-                logger.warning(f"[MotionCtrl] M400 unexpected error: {e}. Using fallback.")
+                logger.warning(f"M400 unexpected error: {e}. Using fallback.")
                 self._m400_supported = False
 
         # Fallback: conservative sleep (same as 1.0)
         fallback_delay = min(timeout, 2.0)
-        logger.debug(f"[MotionCtrl] Using delay fallback: {fallback_delay:.1f} s")
+        logger.debug(f"Using delay fallback: {fallback_delay:.1f} s")
         time.sleep(fallback_delay)
 
     def _sync_position(self) -> None:
