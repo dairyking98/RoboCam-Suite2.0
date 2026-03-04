@@ -124,9 +124,9 @@ class ManualControlPanel(QWidget):
         self.mc_status_label = QLabel("Disconnected")
         layout.addWidget(self.mc_status_label, 0, 1)
 
-        layout.addWidget(QLabel("Current Position:"), 1, 0)
-        self.pos_label = QLabel("X: 0.00  Y: 0.00  Z: 0.00")
-        self.pos_label.setStyleSheet("font-family: monospace; font-weight: bold;")
+        layout.addWidget(QLabel("Position:"), 1, 0)
+        self.pos_label = QLabel("Disconnected")
+        self.pos_label.setStyleSheet("font-family: monospace;")
         layout.addWidget(self.pos_label, 1, 1)
 
         layout.addWidget(QLabel("Camera:"), 2, 0)
@@ -209,9 +209,18 @@ class ManualControlPanel(QWidget):
             self.mc_status_label.setStyleSheet("color: green" if ok else "color: red")
             
             if ok:
-                # Poll live position from the printer
-                pos = mc.query_current_position()
-                self.pos_label.setText(f"X: {pos[0]:.2f}  Y: {pos[1]:.2f}  Z: {pos[2]:.2f}")
+                # Use cached position (no serial polling)
+                pos = mc.get_current_position()
+                if pos == (0.0, 0.0, 0.0):
+                    # Position might be unhomed at startup
+                    self.pos_label.setText("X: 0.00  Y: 0.00  Z: 0.00 (Homing recommended)")
+                    self.pos_label.setStyleSheet("font-family: monospace; color: orange;")
+                else:
+                    self.pos_label.setText(f"X: {pos[0]:.2f}  Y: {pos[1]:.2f}  Z: {pos[2]:.2f}")
+                    self.pos_label.setStyleSheet("font-family: monospace; font-weight: bold; color: black;")
+            else:
+                self.pos_label.setText("X: ---  Y: ---  Z: ---")
+                self.pos_label.setStyleSheet("font-family: monospace; color: gray;")
         except Exception:
             pass
 

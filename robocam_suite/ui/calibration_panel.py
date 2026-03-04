@@ -805,10 +805,17 @@ class CalibrationPanel(QWidget):
 
     def _update_position_display(self):
         try:
-            pos = self.hw_manager.get_motion_controller().get_current_position()
+            mc = self.hw_manager.get_motion_controller()
+            pos = mc.get_current_position()
             self.x_pos_label.setText(f"{pos[0]:.2f}")
             self.y_pos_label.setText(f"{pos[1]:.2f}")
             self.z_pos_label.setText(f"{pos[2]:.2f}")
+            
+            # Show a small homing warning in the status label if at 0,0,0 on startup
+            if mc.is_connected and pos == (0.0, 0.0, 0.0):
+                if not self._cal_status_label.text():
+                    self._cal_status_label.setText("Stage at 0,0,0 \u2014 home required to ensure absolute position.")
+                    self._cal_status_label.setStyleSheet("font-size: 10px; color: orange;")
         except Exception:
             pass
 
