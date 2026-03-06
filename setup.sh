@@ -18,28 +18,50 @@ PYTHON="${PYTHON:-python3}"  # Override with: PYTHON=python3.11 bash setup.sh
 echo "==> Checking Python version..."
 $PYTHON --version
 
-echo "==> Creating virtual environment in '$VENV_DIR'..."
-# On Raspberry Pi, we often need access to system packages for libcamera.
-# Using --system-site-packages allows the venv to use the system libcamera-python.
+# Check if we should skip venv (only on Pi)
+SKIP_VENV=false
 if [[ "$OSTYPE" == "linux-gnueabihf"* ]] || [[ "$OSTYPE" == "linux-gnu"* ]]; then
     if [ -f /etc/rpi-issue ]; then
-        echo "    Using --system-site-packages for Raspberry Pi compatibility."
-        $PYTHON -m venv --system-site-packages "$VENV_DIR"
+        echo "==> Raspberry Pi detected. Would you like to use a virtual environment? (y/n)"
+        # Default to yes for safety
+        read -r use_venv
+        if [[ "$use_venv" == "n" ]]; then
+            SKIP_VENV=true
+        fi
+    fi
+fi
+
+if [ "$SKIP_VENV" = false ]; then
+    echo "==> Creating virtual environment in '$VENV_DIR'..."
+    # On Raspberry Pi, we often need access to system packages for libcamera.
+    # Using --system-site-packages allows the venv to use the system libcamera-python.
+    if [[ "$OSTYPE" == "linux-gnueabihf"* ]] || [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        if [ -f /etc/rpi-issue ]; then
+            echo "    Using --system-site-packages for Raspberry Pi compatibility."
+            $PYTHON -m venv --system-site-packages "$VENV_DIR"
+        else
+            $PYTHON -m venv "$VENV_DIR"
+        fi
     else
         $PYTHON -m venv "$VENV_DIR"
     fi
+    
+    echo "==> Activating virtual environment..."
+    source "$VENV_DIR/bin/activate"
+    
+    echo "==> Upgrading pip..."
+    pip install --upgrade pip
 else
-    $PYTHON -m venv "$VENV_DIR"
+    echo "==> Skipping virtual environment. Installing dependencies globally..."
+    echo "    (You may need to run this script with sudo if you hit permission errors)"
 fi
 
-echo "==> Activating virtual environment..."
-source "$VENV_DIR/bin/activate"
-
-echo "==> Upgrading pip..."
-pip install --upgrade pip
-
 echo "==> Installing RoboCam-Suite and its dependencies..."
-pip install -e .
+if [ "$SKIP_VENV" = true ]; then
+    pip3 install -e .
+else
+    pip install -e .
+fi
 
 # --- Raspberry Pi HQ Camera (picamera2 / libcamera) ---
 if [[ "$OSTYPE" == "linux-gnueabihf"* ]] || [[ "$OSTYPE" == "linux-gnu"* ]]; then
@@ -57,9 +79,11 @@ if [[ "$OSTYPE" == "linux-gnueabihf"* ]] || [[ "$OSTYPE" == "linux-gnu"* ]]; the
         fi
 
         echo "    Installing picamera2 Python wrapper..."
-        # picamera2 often needs to be installed with --system-site-packages if 
-        # using the system libcamera, but here we try to install the pip version.
-        pip install picamera2 || echo "WARNING: picamera2 pip install failed. Ensure libcamera-python is installed."
+        if [ "$SKIP_VENV" = true ]; then
+            pip3 install picamera2 || echo "WARNING: picamera2 pip install failed. Ensure libcamera-python is installed."
+        else
+            pip install picamera2 || echo "WARNING: picamera2 pip install failed. Ensure libcamera-python is installed."
+        fi
     fi
 fi
 
@@ -70,20 +94,32 @@ fi
 echo "==> Installing Player One Camera SDK (pyPOACamera + native library)..."
 echo "    Downloads SDK from player-one-astronomy.com into vendor/playerone/"
 echo "    Safe to skip if you don't have a Player One camera."
-python scripts/install_playerone_sdk.py || {
-    echo "WARNING: Player One SDK install failed or was skipped."
-    echo "         To install manually later:  python scripts/install_playerone_sdk.py"
-}
+if [ "$SKIP_VENV" = true ]; then
+    python3 scripts/install_playerone_sdk.py || {
+        echo "WARNING: Player One SDK install failed or was skipped."
+    }
+else
+    python scripts/install_playerone_sdk.py || {
+        echo "WARNING: Player One SDK install failed or was skipped."
+    }
+fi
 
 echo ""
 echo "============================================================"
 echo " Setup complete!"
 echo ""
-echo " To activate the environment, run:"
-echo "   source .venv/bin/activate"
+if [ "$SKIP_VENV" = false ]; then
+    echo " To launch the application using the virtual environment:"
+    echo "   source .venv/bin/activate"
+    echo "   python main.py"
+else
+    echo " To launch the application directly:"
+    echo "   python3 main.py"
+fi
 echo ""
-echo " To launch the application:"
-echo "   python main.py"
-echo "   -- or --"
-echo "   python -m robocam_suite"
+echo " NOTE FOR RASPBERRY PI USERS:"
+echo " If you have installed system-level dependencies (e.g., python3-libcamera),"
+echo " you can also run the app directly using the system Python:"
+echo "   python3 main.py"
+echo " (Ensure you've run: sudo apt install python3-pyside6 python3-opencv python3-serial)"
 echo "============================================================"
