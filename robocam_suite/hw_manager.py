@@ -83,21 +83,19 @@ class HardwareManager:
                 )
                 self._gpio_controller = null_gpio.NullGPIOController()
             else:
-                driver = gpio_config.get("driver", "auto")
-                
-                # Auto-detect driver if not explicitly set or if running on a Pi
+                # Auto-detect driver: always prefer native_rpi on a Pi regardless of config
                 is_pi = platform.system() == "Linux" and (
                     os.path.exists("/proc/device-tree/model") and 
                     "raspberry pi" in open("/proc/device-tree/model").read().lower()
                 )
                 
-                if driver == "auto":
-                    if is_pi:
-                        driver = "native_rpi"
-                        logger.info("[HW] Raspberry Pi detected. Using NativeRPiGPIOController.")
-                    else:
-                        driver = "arduino_serial"
-                        logger.info("[HW] Not a Pi. Falling back to ArduinoSerialGPIOController.")
+                driver = gpio_config.get("driver", "auto")
+                if is_pi:
+                    driver = "native_rpi"
+                    logger.info("[HW] Raspberry Pi detected. Forcing NativeRPiGPIOController.")
+                elif driver == "auto":
+                    driver = "arduino_serial"
+                    logger.info("[HW] Not a Pi. Falling back to ArduinoSerialGPIOController.")
 
                 if driver == "native_rpi":
                     self._gpio_controller = native_rpi_gpio.NativeRPiGPIOController(

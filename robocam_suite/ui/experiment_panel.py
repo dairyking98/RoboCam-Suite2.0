@@ -620,6 +620,14 @@ class ExperimentPanel(QWidget):
             self.well_selection.clear_calibration()
             logger.info("[Experiment] Well dimensions not set — well grid cleared.")
             return
+            
+        # Also check if corner values are non-zero (simple heuristic for "not actually calibrated")
+        corners_list = [corners.get(n) for n in CORNER_NAMES]
+        if all(c == (0.0, 0.0, 0.0) for c in corners_list):
+            self.well_selection.clear_calibration()
+            logger.info("[Experiment] All corners are 0,0,0 — assuming uncalibrated.")
+            return
+
         self.well_selection.rebuild(rows, cols)
         logger.info(f"[Experiment] Synced well grid: {rows} rows \u00d7 {cols} cols")
     # ------------------------------------------------------------------
