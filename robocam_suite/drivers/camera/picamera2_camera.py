@@ -54,21 +54,29 @@ class Picamera2Camera(Camera):
         logger.warning("[Picamera2] Attempting FORCE RESET of camera resources...")
         
         try:
-            # 1. Kill common libcamera-apps that might be holding the lock
-            apps = ["libcamera-hello", "libcamera-vid", "libcamera-still", "libcamera-raw"]
+            # 1. Kill common libcamera-apps and v4l2 utilities
+            apps = ["libcamera-hello", "libcamera-vid", "libcamera-still", "libcamera-raw", "v4l2-ctl"]
             for app in apps:
                 subprocess.run(["pkill", "-9", app], stderr=subprocess.DEVNULL)
             
-            # 2. Try to find other python processes using the camera (excluding ourselves)
-            # This is more aggressive and should be used with caution.
-            # We look for processes holding /dev/video* or /dev/media*
-            # This requires 'fuser' which is usually installed on RPi
+            # 2. Kill any other python process that might be using the camera (except us)
+            # We use pgrep to find other python processes and check if they are us
             try:
-                for dev in ["/dev/video0", "/dev/media0", "/dev/media1", "/dev/media2"]:
-                    if os.path.exists(dev):
-                        subprocess.run(["fuser", "-k", "-TERM", dev], stderr=subprocess.DEVNULL)
+                current_pid = str(os.getpid())
+                result = subprocess.run(["pgrep", "python"], capture_output=True, text=True)
+                pids = result.stdout.strip().split("\n")
+                for pid in pids:
+                    if pid and pid != current_pid:
+                        # Check if this process is holding a camera device
+                        # We use lsof if available, otherwise fuser is fine
+                        subprocess.run(["fuser", "-k", "-9", "/dev/video0"], stderr=subprocess.DEVNULL)
+                        subprocess.run(["fuser", "-k", "-9", "/dev/media0"], stderr=subprocess.DEVNULL)
             except:
                 pass
+            
+            # 3. Last resort: restart the unicam driver (requires sudo, might not work without password)
+            # subprocess.run(["sudo", "modprobe", "-r", "bcm2835_unicam"], stderr=subprocess.DEVNULL)
+            # subprocess.run(["sudo", "modprobe", "bcm2835_unicam"], stderr=subprocess.DEVNULL)
 
             logger.info("[Picamera2] Force reset commands sent.")
             return True
@@ -161,17 +169,27 @@ class Picamera2Camera(Camera):
     def _capture_loop(self):
         """Background thread to continuously pull frames into the queue."""
         logger.debug("[Picamera2] Capture loop started.")
+        import cv2
         while not self._stop_event.is_set():
             try:
                 if self._picamera2:
-                    frame = self._picamera2.capture_array()
-                    # Keep the queue fresh by removing old frames if full
-                    if self._frame_queue.full():
-                        try:
-                            self._frame_queue.get_nowait()
-                        except queue.Empty:
-                            pass
-                    self._frame_queue.put(frame)
+                    # Capture a frame into a numpy array.
+                    # Since we configured for YUV420, capture_array() returns YUV data.
+                    # We convert it to BGR (standard for OpenCV/RoboCam) here.
+                    frame_yuv = self._picamera2.capture_array()
+                    
+                    if frame_yuv is not None:
+                        # Picamera2 capture_array() for YUV420 returns a YUV420p array.
+                        # We use cv2 to convert it to BGR.
+                        frame = cv2.cvtColor(frame_yuv, cv2.COLOR_YUV420p2BGR)
+                        
+                        # Keep the queue fresh by removing old frames if full
+                        if self._frame_queue.full():
+                            try:
+                                self._frame_queue.get_nowait()
+                            except queue.Empty:
+                                pass
+                        self._frame_queue.put(frame)
                 else:
                     time.sleep(0.1)
             except Exception as e:
