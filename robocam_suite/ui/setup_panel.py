@@ -477,7 +477,20 @@ class SetupPanel(QWidget):
             "This may take a few seconds."
         )
         self.cam_scan_btn.clicked.connect(self._enumerate_cameras)
-        layout.addWidget(self.cam_scan_btn, 0, 2)
+        
+        # Force Reset button (Pi only)
+        import platform
+        if platform.system() == "Linux":
+            self.cam_reset_btn = QPushButton("Force Reset Camera")
+            self.cam_reset_btn.setToolTip("Kill zombie processes holding the camera lock (Pi only)")
+            self.cam_reset_btn.clicked.connect(self._on_force_reset_camera)
+            # Use a horizontal layout for the buttons to keep them together
+            btn_layout = QHBoxLayout()
+            btn_layout.addWidget(self.cam_scan_btn)
+            btn_layout.addWidget(self.cam_reset_btn)
+            layout.addLayout(btn_layout, 0, 2)
+        else:
+            layout.addWidget(self.cam_scan_btn, 0, 2)
 
         self.cam_scan_status = QLabel("Scanning…")
         self.cam_scan_status.setStyleSheet("color: gray; font-size: 10px;")
@@ -849,6 +862,26 @@ class SetupPanel(QWidget):
     # ------------------------------------------------------------------
     # Camera enumeration
     # ------------------------------------------------------------------
+
+    def _on_force_reset_camera(self) -> None:
+        """Attempt to release camera resources by killing zombie processes."""
+        from robocam_suite.drivers.camera.picamera2_camera import Picamera2Camera
+        from PySide6.QtWidgets import QMessageBox
+        
+        reply = QMessageBox.question(
+            self, "Force Reset Camera",
+            "This will attempt to kill all other processes holding the camera lock.\n"
+            "It may cause a temporary flicker or app hang.\n\n"
+            "Proceed?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            success = Picamera2Camera.force_reset()
+            if success:
+                QMessageBox.information(self, "Success", "Force reset commands sent.\nPlease try scanning and connecting again.")
+            else:
+                QMessageBox.warning(self, "Failed", "Force reset failed. You may need to run 'pkill -9 libcamera' manually.")
 
     def _enumerate_cameras(self):
         self.cam_scan_btn.setEnabled(False)

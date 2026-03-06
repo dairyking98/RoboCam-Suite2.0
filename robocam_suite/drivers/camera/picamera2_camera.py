@@ -42,6 +42,40 @@ class Picamera2Camera(Camera):
     matching the RoboCam 1.0 implementation style.
     """
 
+    @staticmethod
+    def force_reset() -> bool:
+        """
+        Forcefully release camera resources by killing other libcamera processes.
+        This is a 'last resort' for 'Device Busy' errors.
+        """
+        import subprocess
+        import os
+        
+        logger.warning("[Picamera2] Attempting FORCE RESET of camera resources...")
+        
+        try:
+            # 1. Kill common libcamera-apps that might be holding the lock
+            apps = ["libcamera-hello", "libcamera-vid", "libcamera-still", "libcamera-raw"]
+            for app in apps:
+                subprocess.run(["pkill", "-9", app], stderr=subprocess.DEVNULL)
+            
+            # 2. Try to find other python processes using the camera (excluding ourselves)
+            # This is more aggressive and should be used with caution.
+            # We look for processes holding /dev/video* or /dev/media*
+            # This requires 'fuser' which is usually installed on RPi
+            try:
+                for dev in ["/dev/video0", "/dev/media0", "/dev/media1", "/dev/media2"]:
+                    if os.path.exists(dev):
+                        subprocess.run(["fuser", "-k", "-TERM", dev], stderr=subprocess.DEVNULL)
+            except:
+                pass
+
+            logger.info("[Picamera2] Force reset commands sent.")
+            return True
+        except Exception as e:
+            logger.error(f"[Picamera2] Force reset failed: {e}")
+            return False
+
     def __init__(self, config: Optional[dict] = None, simulate: bool = False):
         self._config = config or {}
         self._simulate = simulate
@@ -81,9 +115,10 @@ class Picamera2Camera(Camera):
                     self._picamera2 = Picamera2(camera_num=cam_idx)
                     break
                 except Exception as e:
-                    if "busy" in str(e).lower() and attempt < max_retries - 1:
-                        logger.warning(f"[Picamera2] Device busy, retrying in 1s... (Attempt {attempt+1}/{max_retries})")
-                        time.sleep(1)
+                    if "Device or resource busy" in str(e) and attempt < 2:
+                        logger.warning(f"[Picamera2] Device busy, attempting AUTOMATIC FORCE RESET... (attempt {attempt+1}/3)")
+                        self.force_reset() # Attempt to kill zombie processes
+                        time.sleep(1.5) # Give the OS a bit more time to recover
                     else:
                         raise e
             
