@@ -19,7 +19,18 @@ echo "==> Checking Python version..."
 $PYTHON --version
 
 echo "==> Creating virtual environment in '$VENV_DIR'..."
-$PYTHON -m venv "$VENV_DIR"
+# On Raspberry Pi, we often need access to system packages for libcamera.
+# Using --system-site-packages allows the venv to use the system libcamera-python.
+if [[ "$OSTYPE" == "linux-gnueabihf"* ]] || [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    if [ -f /etc/rpi-issue ]; then
+        echo "    Using --system-site-packages for Raspberry Pi compatibility."
+        $PYTHON -m venv --system-site-packages "$VENV_DIR"
+    else
+        $PYTHON -m venv "$VENV_DIR"
+    fi
+else
+    $PYTHON -m venv "$VENV_DIR"
+fi
 
 echo "==> Activating virtual environment..."
 source "$VENV_DIR/bin/activate"
@@ -30,17 +41,25 @@ pip install --upgrade pip
 echo "==> Installing RoboCam-Suite and its dependencies..."
 pip install -e .
 
-# --- Raspberry Pi HQ Camera (picamera2) ---
+# --- Raspberry Pi HQ Camera (picamera2 / libcamera) ---
 if [[ "$OSTYPE" == "linux-gnueabihf"* ]] || [[ "$OSTYPE" == "linux-gnu"* ]]; then
     if [ -f /etc/rpi-issue ]; then
-        echo "==> Raspberry Pi detected. Installing picamera2 dependencies..."
-        # We try to install the system-level picamera2 if possible, or use the 
-        # python-picamera2 package if it's available. 
-        # Note: modern RPi OS (Bullseye/Bookworm) uses libcamera.
-        echo "    Installing libcamera and picamera2 Python bindings..."
-        # On modern RPi OS, we can use pip to install picamera2, but it requires 
-        # libcamera-dev and other system dependencies.
-        pip install picamera2 || echo "WARNING: picamera2 pip install failed. Ensure you have libcamera installed."
+        echo "==> Raspberry Pi detected. Installing picamera2 and libcamera dependencies..."
+        
+        # On modern RPi OS (Bullseye/Bookworm), libcamera-python is the core.
+        # Picamera2 is a high-level wrapper around it.
+        
+        # We can't easily install system packages (apt) without sudo, 
+        # but we can check if they are missing and warn the user.
+        if ! dpkg -l | grep -q "python3-libcamera"; then
+            echo "WARNING: python3-libcamera not found. You may need to run:"
+            echo "         sudo apt update && sudo apt install -y python3-libcamera python3-kms++ libcap-dev"
+        fi
+
+        echo "    Installing picamera2 Python wrapper..."
+        # picamera2 often needs to be installed with --system-site-packages if 
+        # using the system libcamera, but here we try to install the pip version.
+        pip install picamera2 || echo "WARNING: picamera2 pip install failed. Ensure libcamera-python is installed."
     fi
 fi
 
