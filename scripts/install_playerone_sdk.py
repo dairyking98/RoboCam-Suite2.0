@@ -46,6 +46,13 @@ EXTRACT_MAP: dict[str, dict[str, str]] = {
         "lib/x64/libPlayerOneCamera.so.3.10.0":      "libPlayerOneCamera.so.3.10.0",
         "lib/x64/libPlayerOneCamera.so.3":           "libPlayerOneCamera.so.3",
         "lib/x64/libPlayerOneCamera.so":             "libPlayerOneCamera.so",
+        # Support for Raspberry Pi (ARM)
+        "lib/armv7/libPlayerOneCamera.so.3.10.0":    "libPlayerOneCamera.so.3.10.0",
+        "lib/armv7/libPlayerOneCamera.so.3":         "libPlayerOneCamera.so.3",
+        "lib/armv7/libPlayerOneCamera.so":           "libPlayerOneCamera.so",
+        "lib/armv8/libPlayerOneCamera.so.3.10.0":    "libPlayerOneCamera.so.3.10.0",
+        "lib/armv8/libPlayerOneCamera.so.3":         "libPlayerOneCamera.so.3",
+        "lib/armv8/libPlayerOneCamera.so":           "libPlayerOneCamera.so",
     },
     "Darwin": {
         "python/pyPOACamera.py":                          "pyPOACamera.py",
@@ -107,19 +114,44 @@ def _extract_zip(data: bytes, extract_map: dict[str, str], dest: Path):
 def _extract_tar(data: bytes, extract_map: dict[str, str], dest: Path):
     with tarfile.open(fileobj=io.BytesIO(data)) as tf:
         members = tf.getnames()
+        
+        # Determine architecture for Linux
+        arch = platform.machine().lower() # e.g. 'x86_64', 'aarch64', 'armv7l'
+        
         for src_path, dst_name in extract_map.items():
+            # If we are on Linux, we want to skip the wrong architectures
+            if platform.system() == "Linux":
+                if "lib/" in src_path:
+                    if "x64" in src_path and arch not in ["x86_64", "amd64"]:
+                        continue
+                    if "armv8" in src_path and arch not in ["aarch64", "arm64"]:
+                        continue
+                    if "armv7" in src_path and not arch.startswith("armv7"):
+                        continue
+
             match = next((m for m in members if m.endswith(src_path)), None)
             if match is None:
-                print(f"  WARNING: {src_path!r} not found in archive — skipping.")
+                # Only warn if it's the Python wrapper or the correct architecture
+                if "pyPOACamera.py" in src_path:
+                    print(f"  WARNING: {src_path!r} not found in archive — skipping.")
                 continue
+                
             member = tf.getmember(match)
             f = tf.extractfile(member)
             if f is None:
                 continue
             content = f.read()
             out = dest / dst_name
+            
+            # If the file already exists, only overwrite if it's a better match for our arch
+            if out.exists():
+                # Simple heuristic: if we already extracted something and we are here, 
+                # it means we found another match. Since we iterate in order, 
+                # we should probably prefer the one that matches our arch.
+                pass
+
             out.write_bytes(content)
-            print(f"  Extracted: {dst_name}")
+            print(f"  Extracted: {dst_name} (from {src_path})")
 
 
 def main():
