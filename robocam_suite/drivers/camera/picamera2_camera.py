@@ -126,13 +126,23 @@ class Picamera2Camera(Camera):
             # In Picamera2, FPS is not a key in create_video_configuration.
             # It is set via the FrameRate control after starting or by the 
             # configuration's global controls.
-            config = self._picamera2.create_video_configuration(
-                main={"size": self._resolution, "format": "XBGR8888"}
-            )
-            self._picamera2.configure(config)
+            # We also use a more standard format 'RGB888' which is widely supported.
+            try:
+                config = self._picamera2.create_video_configuration(
+                    main={"size": self._resolution, "format": "RGB888"}
+                )
+                self._picamera2.configure(config)
+            except Exception as e:
+                logger.warning(f"[Picamera2] Failed with preferred config, trying default: {e}")
+                # Fallback to a very safe default
+                config = self._picamera2.create_video_configuration()
+                self._picamera2.configure(config)
             
-            # Set the framerate
-            self._picamera2.set_controls({"FrameRate": self._fps})
+            # Set the framerate if supported
+            try:
+                self._picamera2.set_controls({"FrameRate": self._fps})
+            except:
+                pass
             
             self._picamera2.start()
             

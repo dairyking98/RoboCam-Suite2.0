@@ -270,7 +270,7 @@ class _CameraEnumerator(QThread):
                             # Replace the hardcoded .dll path with a more flexible one
                             new_content = content.replace(
                                 'dll = cdll.LoadLibrary("./PlayerOneCamera.dll")',
-                                'import platform; lib_name = "libPlayerOneCamera.so" if platform.system() == "Linux" else "PlayerOneCamera.dll"; dll = cdll.LoadLibrary(os.path.join(os.path.dirname(__file__), lib_name))'
+                                'import os; import platform; lib_name = "libPlayerOneCamera.so" if platform.system() == "Linux" else "PlayerOneCamera.dll"; dll = cdll.LoadLibrary(os.path.join(os.path.dirname(__file__), lib_name))'
                             )
                             with open(wrapper_path, 'w') as f:
                                 f.write(new_content)
