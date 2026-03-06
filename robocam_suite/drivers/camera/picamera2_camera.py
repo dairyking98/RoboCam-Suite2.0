@@ -1,7 +1,9 @@
 import numpy as np
 from typing import Optional, Tuple
 import logging
-import sys
+import threading
+import queue
+import time
 import importlib.util
 
 from robocam_suite.core.camera import Camera
@@ -34,7 +36,11 @@ def _get_picamera2_class():
     return None
 
 class Picamera2Camera(Camera):
-    """A camera implementation using Raspberry Pi's Picamera2 library."""
+    """
+    A camera implementation using Raspberry Pi's Picamera2 library.
+    Uses a background thread and Queue for smooth frame acquisition, 
+    matching the RoboCam 1.0 implementation style.
+    """
 
     def __init__(self, config: Optional[dict] = None, simulate: bool = False):
         self._config = config or {}
@@ -42,6 +48,11 @@ class Picamera2Camera(Camera):
         self._picamera2 = None
         self._resolution = self._config.get("resolution", (2028, 1520)) # HQ Camera default
         self._fps = self._config.get("fps", 30.0)
+        
+        # Threading and Queue setup
+        self._frame_queue = queue.Queue(maxsize=2)
+        self._stop_event = threading.Event()
+        self._capture_thread: Optional[threading.Thread] = None
         self._is_running = False
 
         if self._simulate:
@@ -49,7 +60,7 @@ class Picamera2Camera(Camera):
 
     def connect(self) -> None:
         if self._simulate:
-            self._picamera2 = True # type: ignore
+            self._is_running = True
             return
 
         if self.is_connected:
@@ -59,21 +70,11 @@ class Picamera2Camera(Camera):
         if Picamera2 is None:
             raise ImportError("Picamera2 library not found. Ensure you are on a Raspberry Pi with libcamera-python installed.")
 
-        # --- Device Busy Prevention ---
-        # 1. Ensure any previous instance is closed
-        if self._picamera2 is not None:
-            try:
-                self.disconnect()
-            except:
-                pass
-
         try:
-            # We pass a camera index if available, default to 0. 
             cam_idx = self._config.get("camera_index", 0)
             logger.info(f"[Picamera2] Initializing camera {cam_idx}...")
             
-            # 2. Add a small retry loop for 'Device Busy' errors
-            import time
+            # Device Busy Prevention: retry loop
             max_retries = 3
             for attempt in range(max_retries):
                 try:
@@ -93,35 +94,65 @@ class Picamera2Camera(Camera):
             )
             self._picamera2.configure(config)
             self._picamera2.start()
+            
+            # Start background capture thread
+            self._stop_event.clear()
+            self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+            self._capture_thread.start()
+            
             self._is_running = True
-            logger.info(f"[Picamera2] Connected and started at {self._resolution} @ {self._fps} FPS")
+            logger.info(f"[Picamera2] Connected and started thread at {self._resolution} @ {self._fps} FPS")
         except Exception as e:
-            if self._picamera2:
-                try:
-                    self._picamera2.close()
-                except:
-                    pass
-            self._picamera2 = None
-            self._is_running = False
+            self._cleanup_resources()
             logger.error(f"[Picamera2] Failed to initialize: {e}")
             raise ConnectionError(f"Could not initialize Picamera2: {e}") from e
 
-    def disconnect(self) -> None:
-        if self._simulate:
-            self._picamera2 = None
-            return
+    def _capture_loop(self):
+        """Background thread to continuously pull frames into the queue."""
+        logger.debug("[Picamera2] Capture loop started.")
+        while not self._stop_event.is_set():
+            try:
+                if self._picamera2:
+                    frame = self._picamera2.capture_array()
+                    # Keep the queue fresh by removing old frames if full
+                    if self._frame_queue.full():
+                        try:
+                            self._frame_queue.get_nowait()
+                        except queue.Empty:
+                            pass
+                    self._frame_queue.put(frame)
+                else:
+                    time.sleep(0.1)
+            except Exception as e:
+                logger.error(f"[Picamera2] Error in capture loop: {e}")
+                time.sleep(0.5)
+        logger.debug("[Picamera2] Capture loop stopped.")
 
+    def disconnect(self) -> None:
+        self._is_running = False
+        self._stop_event.set()
+        
+        if self._capture_thread and self._capture_thread.is_alive():
+            self._capture_thread.join(timeout=2.0)
+            
+        self._cleanup_resources()
+        logger.info("[Picamera2] Disconnected.")
+
+    def _cleanup_resources(self) -> None:
+        """Safely close the Picamera2 instance."""
         if self._picamera2:
             try:
-                if self._is_running:
-                    self._picamera2.stop()
+                self._picamera2.stop()
                 self._picamera2.close()
-            except Exception as e:
-                logger.error(f"[Picamera2] Error during disconnect: {e}")
-            finally:
-                self._picamera2 = None
-                self._is_running = False
-                logger.info("[Picamera2] Disconnected.")
+            except:
+                pass
+        self._picamera2 = None
+        # Clear the queue
+        while not self._frame_queue.empty():
+            try:
+                self._frame_queue.get_nowait()
+            except queue.Empty:
+                break
 
     def start_capture(self) -> None:
         pass
@@ -133,22 +164,24 @@ class Picamera2Camera(Camera):
         if self._simulate:
             return np.zeros((self._resolution[1], self._resolution[0], 3), dtype=np.uint8)
 
-        if not self.is_connected or not self._is_running:
+        if not self.is_connected:
             return None
 
         try:
-            return self._picamera2.capture_array()
-        except Exception as e:
-            logger.error(f"[Picamera2] Failed to read frame: {e}")
+            # Return the latest frame from the queue without blocking
+            return self._frame_queue.get(timeout=0.1)
+        except queue.Empty:
             return None
 
     def get_resolution(self) -> Tuple[int, int]:
         return self._resolution
 
     def set_resolution(self, resolution: Tuple[int, int]) -> None:
+        if self._resolution == resolution:
+            return
         self._resolution = resolution
         if self.is_connected and not self._simulate:
-            logger.info(f"[Picamera2] Updating resolution to {resolution}. Restarting camera...")
+            logger.info(f"[Picamera2] Updating resolution to {resolution}. Restarting...")
             self.disconnect()
             self.connect()
 
@@ -156,14 +189,16 @@ class Picamera2Camera(Camera):
         return self._fps
 
     def set_fps(self, fps: float) -> None:
+        if self._fps == fps:
+            return
         self._fps = fps
         if self.is_connected and not self._simulate:
-            logger.info(f"[Picamera2] Updating FPS to {fps}. Restarting camera...")
+            logger.info(f"[Picamera2] Updating FPS to {fps}. Restarting...")
             self.disconnect()
             self.connect()
 
     @property
     def is_connected(self) -> bool:
         if self._simulate:
-            return self._picamera2 is not None
-        return self._picamera2 is not None
+            return self._is_running
+        return self._is_running and self._picamera2 is not None
