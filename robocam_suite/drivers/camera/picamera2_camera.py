@@ -281,8 +281,9 @@ class Picamera2Camera(Camera):
         self._resolution = resolution
         if self.is_connected and not self._simulate:
             logger.info(f"[Picamera2] Updating resolution to {resolution}. Restarting...")
+            # We don't call connect() here because the SetupPanel 
+            # handles the teardown and fresh instance creation.
             self.disconnect()
-            self.connect()
 
     def get_fps(self) -> float:
         return self._fps

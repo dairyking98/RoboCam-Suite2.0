@@ -1004,9 +1004,18 @@ class SetupPanel(QWidget):
         logger.info(f"Camera config updated: driver={driver}, device_id={device_id} ({label})")
 
         # Reconnect with the new settings.
+        # We add a small delay to ensure the OS has fully released the camera.
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(1000, self._reconnect_camera_delayed)
+
+    def _reconnect_camera_delayed(self):
         try:
-            self._hw.get_camera().connect()
+            cam = self._hw.get_camera()
+            cam.connect()
             logger.info("[Setup] Camera reconnected successfully.")
+            # If the resolution list was empty, populate it now
+            if self.cam_res_combo.count() == 0:
+                self._update_resolution_list()
         except Exception as e:
             logger.error(f"[Setup] Camera reconnect failed: {e}")
         self._refresh_status()
