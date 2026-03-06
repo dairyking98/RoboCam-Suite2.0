@@ -55,6 +55,10 @@ class Camera(ABC):
         """Set the frames per second."""
         pass
 
+    def get_supported_resolutions(self) -> list[Tuple[int, int]]:
+        """Return a list of supported (width, height) tuples."""
+        return []
+
     @property
     @abstractmethod
     def is_connected(self) -> bool:

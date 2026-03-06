@@ -296,6 +296,19 @@ class Picamera2Camera(Camera):
             self.disconnect()
             self.connect()
 
+    def get_supported_resolutions(self) -> list[Tuple[int, int]]:
+        """Return common sensor modes for the IMX477 HQ camera."""
+        return [
+            (640, 480),
+            (1012, 760),
+            (1280, 720),
+            (1332, 990),
+            (1920, 1080),
+            (2028, 1080),
+            (2028, 1520),
+            (4056, 3040)
+        ]
+
     @property
     def is_connected(self) -> bool:
         if self._simulate:

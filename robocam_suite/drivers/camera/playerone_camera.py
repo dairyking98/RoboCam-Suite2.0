@@ -388,6 +388,29 @@ class PlayerOneCamera(Camera):
         # implicitly controlled by exposure time.  We store the value for
         # informational purposes only.
 
+    def get_supported_resolutions(self) -> list[Tuple[int, int]]:
+        """Return supported resolutions from the camera properties."""
+        if self._simulate:
+            return [(1936, 1100)]
+        
+        if not self._opened or not self._poa:
+            return []
+            
+        try:
+            # Re-read properties to get the list
+            err, props = self._poa.GetCameraProperties(self._cam_index)
+            if err == self._poa.POAErrors.POA_OK:
+                # For now, we return the max and some common ones.
+                return [
+                    (640, 480),
+                    (1280, 720),
+                    (1920, 1080),
+                    (props.maxWidth, props.maxHeight)
+                ]
+        except:
+            pass
+        return []
+
     # ------------------------------------------------------------------
     # is_connected property
     # ------------------------------------------------------------------

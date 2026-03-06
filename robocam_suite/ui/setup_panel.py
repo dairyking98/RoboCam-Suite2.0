@@ -522,9 +522,15 @@ class SetupPanel(QWidget):
         )
         layout.addWidget(self.vid_format_combo, 3, 1, 1, 2)
 
+        # Resolution
+        layout.addWidget(QLabel("Resolution:"), 4, 0)
+        self.cam_res_combo = QComboBox()
+        self.cam_res_combo.setToolTip("Select capture resolution. List is updated after connecting.")
+        layout.addWidget(self.cam_res_combo, 4, 1, 1, 2)
+
         self.cam_apply_btn = QPushButton("Apply & Reconnect Camera")
         self.cam_apply_btn.clicked.connect(self._apply_camera)
-        layout.addWidget(self.cam_apply_btn, 4, 0, 1, 3)
+        layout.addWidget(self.cam_apply_btn, 5, 0, 1, 3)
         return grp
 
     def _build_printer_group(self) -> QGroupBox:
@@ -983,11 +989,17 @@ class SetupPanel(QWidget):
                 pass
             self._hw._camera = None
 
-        self._cfg.update_section("camera", {"driver": driver, "camera_index": device_id})
+        res = self.cam_res_combo.currentData()
+        cam_params = {"driver": driver, "camera_index": device_id}
+        if res:
+            cam_params["resolution"] = list(res)
+
+        self._cfg.update_section("camera", cam_params)
         self._session.update_session("setup", {
             "camera_driver": driver,
             "camera_index": device_id,
             "camera_label": label,
+            "camera_resolution": res,
         })
         logger.info(f"Camera config updated: driver={driver}, device_id={device_id} ({label})")
 
@@ -1088,9 +1100,35 @@ class SetupPanel(QWidget):
             _set_status(self.printer_status_lbl, False)
 
         try:
-            _set_status(self.camera_status_lbl, self._hw.get_camera().is_connected)
+            cam = self._hw.get_camera()
+            _set_status(self.camera_status_lbl, cam.is_connected)
+            if cam.is_connected and self.cam_res_combo.count() == 0:
+                self._update_resolution_list()
         except Exception:
             _set_status(self.camera_status_lbl, False)
+
+    def _update_resolution_list(self):
+        """Update the resolution dropdown based on the connected camera's capabilities."""
+        cam = self._hw.get_camera()
+        if not cam.is_connected:
+            return
+            
+        current_res = cam.get_resolution()
+        supported = cam.get_supported_resolutions()
+        
+        # Ensure current resolution is in the list
+        if current_res not in supported and current_res != (0, 0):
+            supported.append(current_res)
+        supported.sort(key=lambda x: x[0] * x[1])
+        
+        self.cam_res_combo.clear()
+        for w, h in supported:
+            self.cam_res_combo.addItem(f"{w} x {h}", (w, h))
+            
+        # Select current
+        idx = self.cam_res_combo.findData(current_res)
+        if idx >= 0:
+            self.cam_res_combo.setCurrentIndex(idx)
 
         gpio_enabled = self._hw.gpio_enabled
         try:
@@ -1123,6 +1161,11 @@ class SetupPanel(QWidget):
         if saved_label:
             self.cam_device_combo.addItem(saved_label)
             self.cam_scan_status.setText("Previous device restored. Click 'Scan' to refresh.")
+        
+        saved_res = s.get("camera_resolution")
+        if saved_res:
+            w, h = saved_res
+            self.cam_res_combo.addItem(f"{w} x {h}", tuple(saved_res))
 
         # Printer ports
         self._refresh_printer_ports()

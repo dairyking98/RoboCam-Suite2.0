@@ -56,6 +56,9 @@ class _WellRecorder:
         self._output_path = output_path
         self._fps = fps
         self._stop_event = threading.Event()
+        self._frames_captured = 0
+        self._start_time = None
+        self._end_time = None
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -79,17 +82,46 @@ class _WellRecorder:
             logger.error(f"[WellRecorder] Could not open VideoWriter for {self._output_path}")
             return
 
+        self._start_time = time.time()
         writer.write(first_frame)
+        self._frames_captured += 1
+        
         try:
             while not self._stop_event.is_set():
                 frame = self._camera.read_frame()
                 if frame is not None:
                     writer.write(frame)
+                    self._frames_captured += 1
                 else:
                     time.sleep(1.0 / self._fps)
         finally:
+            self._end_time = time.time()
             writer.release()
+            self._save_metadata()
             logger.info(f"[WellRecorder] Saved {self._output_path}")
+
+    def _save_metadata(self):
+        """Save a JSON metadata file alongside the video."""
+        meta_path = self._output_path.rsplit(".", 1)[0] + "_metadata.json"
+        duration = (self._end_time - self._start_time) if self._start_time and self._end_time else 0
+        
+        import json
+        metadata = {
+            "video_file": os.path.basename(self._output_path),
+            "frames_captured": self._frames_captured,
+            "duration_seconds": round(duration, 3),
+            "fps_target": self._fps,
+            "fps_actual": round(self._frames_captured / duration, 2) if duration > 0 else 0,
+            "timestamp": datetime.now().isoformat(),
+            "resolution": list(self._camera.get_resolution())
+        }
+        
+        try:
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(metadata, f, indent=2)
+            logger.info(f"[WellRecorder] Metadata saved to {meta_path}")
+        except Exception as e:
+            logger.error(f"[WellRecorder] Failed to save metadata: {e}")
 
     def stop(self):
         self._stop_event.set()

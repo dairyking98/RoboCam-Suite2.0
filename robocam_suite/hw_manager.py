@@ -1,6 +1,9 @@
+import platform
+import os
 import robocam_suite.drivers.motion.gcode_serial_motion as gcode_serial_motion
 import robocam_suite.drivers.gpio.arduino_serial_gpio as arduino_serial_gpio
 import robocam_suite.drivers.gpio.null_gpio as null_gpio
+import robocam_suite.drivers.gpio.native_rpi_gpio as native_rpi_gpio
 from robocam_suite.drivers.camera import opencv_camera
 from robocam_suite.drivers.camera import playerone_camera
 from robocam_suite.drivers.camera import picamera2_camera
@@ -80,8 +83,27 @@ class HardwareManager:
                 )
                 self._gpio_controller = null_gpio.NullGPIOController()
             else:
-                driver = gpio_config.get("driver")
-                if driver == "arduino_serial":
+                driver = gpio_config.get("driver", "auto")
+                
+                # Auto-detect driver if not explicitly set or if running on a Pi
+                is_pi = platform.system() == "Linux" and (
+                    os.path.exists("/proc/device-tree/model") and 
+                    "raspberry pi" in open("/proc/device-tree/model").read().lower()
+                )
+                
+                if driver == "auto":
+                    if is_pi:
+                        driver = "native_rpi"
+                        logger.info("[HW] Raspberry Pi detected. Using NativeRPiGPIOController.")
+                    else:
+                        driver = "arduino_serial"
+                        logger.info("[HW] Not a Pi. Falling back to ArduinoSerialGPIOController.")
+
+                if driver == "native_rpi":
+                    self._gpio_controller = native_rpi_gpio.NativeRPiGPIOController(
+                        config=gpio_config, simulate=simulate
+                    )
+                elif driver == "arduino_serial":
                     self._gpio_controller = arduino_serial_gpio.ArduinoSerialGPIOController(
                         config=gpio_config, simulate=simulate
                     )

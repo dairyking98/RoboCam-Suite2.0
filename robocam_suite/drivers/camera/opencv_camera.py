@@ -96,6 +96,17 @@ class OpenCVCamera(Camera):
         if self.is_connected and not self._simulate:
             self._capture.set(cv2.CAP_PROP_FPS, fps)
 
+    def get_supported_resolutions(self) -> list[Tuple[int, int]]:
+        """Return common standard resolutions for OpenCV cameras."""
+        return [
+            (640, 480),
+            (800, 600),
+            (1024, 768),
+            (1280, 720),
+            (1280, 960),
+            (1920, 1080)
+        ]
+
     @property
     def is_connected(self) -> bool:
         if self._simulate:
