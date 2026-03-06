@@ -206,10 +206,11 @@ class _CameraEnumerator(QThread):
         if os_name == "Linux":
             try:
                 from picamera2 import Picamera2
-                logger.info("[CameraEnum] Picamera2 detected, probing...")
-                # Probing Picamera2 by instantiating and checking if it opens
-                p = Picamera2()
-                p.close()
+                logger.info("[CameraEnum] Picamera2 detected, checking for cameras...")
+                # We can't easily probe without instantiating, which might fail if 
+                # another process is using it. But since the user has a Pi and 
+                # libcamera-hello works, we should at least offer the option if 
+                # the library is present.
                 devices.append(("Raspberry Pi HQ Camera (picamera2)", "picamera2", 0))
             except ImportError:
                 logger.debug("[CameraEnum] Picamera2 library not found, skipping probe.")

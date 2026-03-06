@@ -38,9 +38,12 @@ class Picamera2Camera(Camera):
             raise ImportError("Picamera2 library not found. Ensure you are on a Raspberry Pi with libcamera installed.")
 
         try:
-            self._picamera2 = Picamera2()
-            # Configure the camera with the requested resolution and FPS
-            # We use the 'main' stream for the full resolution frames
+            # We pass a camera index if available, default to 0. 
+            # Some Pi boards have multiple camera ports.
+            cam_idx = self._config.get("camera_index", 0)
+            self._picamera2 = Picamera2(camera_num=cam_idx)
+            
+            # Use default video configuration as a starting point
             config = self._picamera2.create_video_configuration(
                 main={"size": self._resolution, "format": "XBGR8888"},
                 fps=self._fps
@@ -50,8 +53,14 @@ class Picamera2Camera(Camera):
             self._is_running = True
             logger.info(f"[Picamera2] Connected and started at {self._resolution} @ {self._fps} FPS")
         except Exception as e:
+            if self._picamera2:
+                try:
+                    self._picamera2.close()
+                except:
+                    pass
             self._picamera2 = None
             self._is_running = False
+            logger.error(f"[Picamera2] Failed to initialize: {e}")
             raise ConnectionError(f"Could not initialize Picamera2: {e}") from e
 
     def disconnect(self) -> None:
