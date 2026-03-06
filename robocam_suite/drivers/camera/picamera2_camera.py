@@ -191,18 +191,27 @@ class Picamera2Camera(Camera):
         """Background thread to continuously pull frames into the queue."""
         logger.debug("[Picamera2] Capture loop started.")
         import cv2
+        import numpy as np
+        
         while not self._stop_event.is_set():
             try:
                 if self._picamera2:
-                    # Capture a frame into a numpy array.
-                    # Since we configured for YUV420, capture_array() returns YUV data.
-                    # We convert it to BGR (standard for OpenCV/RoboCam) here.
-                    frame_yuv = self._picamera2.capture_array()
+                    # Use capture_array() to get the frame.
+                    # Depending on the configuration, this could be YUV, RGB, or XBGR.
+                    frame = self._picamera2.capture_array()
                     
-                    if frame_yuv is not None:
-                        # Picamera2 capture_array() for YUV420 returns a YUV420p array.
-                        # We use cv2 to convert it to BGR.
-                        frame = cv2.cvtColor(frame_yuv, cv2.COLOR_YUV420p2BGR)
+                    if frame is not None:
+                        # If the frame is YUV420 (common for IMX477), convert to BGR.
+                        # We detect this by checking the shape.
+                        # YUV420p has height * 1.5, and 1 channel.
+                        if len(frame.shape) == 2 or (len(frame.shape) == 3 and frame.shape[2] == 1):
+                            frame = cv2.cvtColor(frame, cv2.COLOR_YUV420p2BGR)
+                        # If it's already 3-channel (RGB), convert to BGR for OpenCV.
+                        elif len(frame.shape) == 3 and frame.shape[2] == 3:
+                            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                        # If it's 4-channel (XBGR/RGBA), drop the alpha and convert.
+                        elif len(frame.shape) == 3 and frame.shape[2] == 4:
+                            frame = cv2.cvtColor(frame[:, :, :3], cv2.COLOR_RGB2BGR)
                         
                         # Keep the queue fresh by removing old frames if full
                         if self._frame_queue.full():
