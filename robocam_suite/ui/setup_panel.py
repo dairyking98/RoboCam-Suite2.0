@@ -205,23 +205,16 @@ class _CameraEnumerator(QThread):
         # --- Raspberry Pi HQ Camera (via picamera2) ---
         if os_name == "Linux":
             try:
-                # Check for picamera2 in a more robust way. 
-                # On some Pi systems, it might be installed in a way that needs 
-                # a proper import check or looking for libcamera-specific devices.
-                has_picamera2 = False
-                try:
-                    import importlib.util
-                    if importlib.util.find_spec("picamera2") is not None:
-                        has_picamera2 = True
-                except:
-                    pass
+                # Use the same robust check as in the driver
+                from robocam_suite.drivers.camera.picamera2_camera import _get_picamera2_class
+                Picamera2 = _get_picamera2_class()
                 
                 # Also check for common libcamera/picamera2 video devices
                 import os
                 has_v4l2_pisp = os.path.exists("/dev/video0") or os.path.exists("/dev/media0")
                 
-                if has_picamera2 or has_v4l2_pisp:
-                    logger.info(f"[CameraEnum] Picamera2/libcamera detected (lib={has_picamera2}, dev={has_v4l2_pisp})")
+                if Picamera2 is not None or has_v4l2_pisp:
+                    logger.info(f"[CameraEnum] Picamera2/libcamera detected (lib={Picamera2 is not None}, dev={has_v4l2_pisp})")
                     devices.append(("Raspberry Pi HQ Camera (picamera2)", "picamera2", 0))
                 else:
                     logger.debug("[CameraEnum] Picamera2/libcamera not detected.")

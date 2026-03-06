@@ -1,16 +1,37 @@
-try:
-    from picamera2 import Picamera2
-except ImportError:
-    Picamera2 = None
-
 import numpy as np
 from typing import Optional, Tuple
 import logging
+import sys
+import importlib.util
 
 from robocam_suite.core.camera import Camera
 from robocam_suite.logger import setup_logger
 
 logger = setup_logger()
+
+# Global variable to store the Picamera2 class if successfully imported
+_Picamera2Class = None
+
+def _get_picamera2_class():
+    """Attempt to import Picamera2 class in a robust way."""
+    global _Picamera2Class
+    if _Picamera2Class is not None:
+        return _Picamera2Class
+    
+    try:
+        from picamera2 import Picamera2
+        _Picamera2Class = Picamera2
+        return _Picamera2Class
+    except ImportError:
+        # Try finding it if it's not in the standard path
+        if importlib.util.find_spec("picamera2") is not None:
+            try:
+                import picamera2
+                _Picamera2Class = picamera2.Picamera2
+                return _Picamera2Class
+            except:
+                pass
+    return None
 
 class Picamera2Camera(Camera):
     """A camera implementation using Raspberry Pi's Picamera2 library."""
@@ -34,16 +55,17 @@ class Picamera2Camera(Camera):
         if self.is_connected:
             return
 
+        Picamera2 = _get_picamera2_class()
         if Picamera2 is None:
-            raise ImportError("Picamera2 library not found. Ensure you are on a Raspberry Pi with libcamera installed.")
+            raise ImportError("Picamera2 library not found. Ensure you are on a Raspberry Pi with libcamera-python installed.")
 
         try:
             # We pass a camera index if available, default to 0. 
-            # Some Pi boards have multiple camera ports.
             cam_idx = self._config.get("camera_index", 0)
+            logger.info(f"[Picamera2] Initializing camera {cam_idx}...")
             self._picamera2 = Picamera2(camera_num=cam_idx)
             
-            # Use default video configuration as a starting point
+            # Configure the camera
             config = self._picamera2.create_video_configuration(
                 main={"size": self._resolution, "format": "XBGR8888"},
                 fps=self._fps
@@ -81,11 +103,9 @@ class Picamera2Camera(Camera):
                 logger.info("[Picamera2] Disconnected.")
 
     def start_capture(self) -> None:
-        # Picamera2 is started during connect() in this implementation
         pass
 
     def stop_capture(self) -> None:
-        # Picamera2 is stopped during disconnect()
         pass
 
     def read_frame(self) -> Optional[np.ndarray]:
@@ -96,7 +116,6 @@ class Picamera2Camera(Camera):
             return None
 
         try:
-            # capture_array() returns a numpy array from the 'main' stream
             return self._picamera2.capture_array()
         except Exception as e:
             logger.error(f"[Picamera2] Failed to read frame: {e}")
@@ -108,7 +127,6 @@ class Picamera2Camera(Camera):
     def set_resolution(self, resolution: Tuple[int, int]) -> None:
         self._resolution = resolution
         if self.is_connected and not self._simulate:
-            # Picamera2 requires a restart to change resolution
             logger.info(f"[Picamera2] Updating resolution to {resolution}. Restarting camera...")
             self.disconnect()
             self.connect()
