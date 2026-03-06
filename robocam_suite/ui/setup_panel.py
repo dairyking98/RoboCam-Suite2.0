@@ -84,7 +84,7 @@ class _CameraEnumerator(QThread):
     Probes for available camera devices in a background thread.
     Emits a list of (display_label, driver_key, device_id) tuples.
     """
-    cameras_found = Signal(list)   # list of (label, driver, device_id)
+    cameras_found = Signal(list)   # list of (label, driver, device_id, resolutions)
 
     @staticmethod
     def _get_windows_camera_names() -> dict:
@@ -194,7 +194,7 @@ class _CameraEnumerator(QThread):
         except Exception as e:
             logger.error(f"[CameraEnum] Unexpected error during camera scan: {e}", exc_info=True)
         if not devices:
-            devices.append(("No cameras detected", "opencv", 0))
+            devices.append(("No cameras detected", "opencv", 0, []))
         self.cameras_found.emit(devices)
 
     def _run_inner(self, devices: list):  # noqa: C901
@@ -218,7 +218,9 @@ class _CameraEnumerator(QThread):
                 
                 if Picamera2 is not None or has_v4l2_pisp:
                     logger.info(f"[CameraEnum] Picamera2/libcamera detected (lib={Picamera2 is not None}, dev={has_v4l2_pisp})")
-                    devices.append(("Raspberry Pi HQ Camera (picamera2)", "picamera2", 0))
+                    from robocam_suite.drivers.camera.picamera2_camera import Picamera2Camera
+                    res_list = Picamera2Camera.get_supported_resolutions_static()
+                    devices.append(("Raspberry Pi HQ Camera (picamera2)", "picamera2", 0, res_list))
                 else:
                     logger.debug("[CameraEnum] Picamera2/libcamera not detected.")
             except Exception as e:
@@ -244,7 +246,9 @@ class _CameraEnumerator(QThread):
                         name = f"Camera {idx} (AVFoundation)"
                     else:
                         name = f"Camera {idx}"
-                    devices.append((name, "opencv", idx))
+                    from robocam_suite.drivers.camera.opencv_camera import OpenCVCamera
+                    res_list = OpenCVCamera.get_supported_resolutions_static()
+                    devices.append((name, "opencv", idx, res_list))
                     cap.release()
         except Exception as e:
             logger.debug(f"[CameraEnum] OpenCV probe failed: {e}")
@@ -290,7 +294,9 @@ class _CameraEnumerator(QThread):
                 model = props.cameraModelName.decode(errors="replace").strip()
                 label = f"PlayerOne — {model} (index {i})"
                 logger.info(f"[CameraEnum] Found PlayerOne camera: {label}")
-                devices.append((label, "playerone", i))
+                from robocam_suite.drivers.camera.playerone_camera import PlayerOneCamera
+                res_list = PlayerOneCamera.get_supported_resolutions_static()
+                devices.append((label, "playerone", i, res_list))
         except ImportError as e:
             logger.warning(f"[CameraEnum] pyPOACamera import failed (SDK not installed or DLL missing): {e}")
         except Exception as e:
@@ -469,6 +475,7 @@ class SetupPanel(QWidget):
             "PlayerOne   — Player One Astronomy USB cameras (SDK required).\n"
             "Raspberry Pi — Pi Camera Module via picamera2 (Pi only)."
         )
+        self.cam_device_combo.currentIndexChanged.connect(self._on_camera_device_changed)
         layout.addWidget(self.cam_device_combo, 0, 1)
 
         self.cam_scan_btn = QPushButton("Scan for Cameras")
@@ -900,21 +907,59 @@ class SetupPanel(QWidget):
         self._camera_devices = devices
         current_text = self.cam_device_combo.currentText()
         self.cam_device_combo.clear()
-        for label, driver, device_id in devices:
+        for label, driver, device_id, resolutions in devices:
             self.cam_device_combo.addItem(label)
 
         # Try to restore previous selection
         idx = self.cam_device_combo.findText(current_text)
         if idx >= 0:
             self.cam_device_combo.setCurrentIndex(idx)
+        else:
+            # If not found, try to find by driver/index from session
+            session_label = self._session.get_session("setup", {}).get("camera_label", "")
+            if session_label:
+                idx = self.cam_device_combo.findText(session_label)
+                if idx >= 0:
+                    self.cam_device_combo.setCurrentIndex(idx)
 
-        count = sum(1 for _, d, _ in devices if d != "opencv" or True)
-        real_count = sum(1 for lbl, _, _ in devices if "No cameras" not in lbl)
+        # Trigger resolution list update for the selected camera
+        self._on_camera_device_changed(self.cam_device_combo.currentIndex())
+
+        real_count = sum(1 for lbl, _, _, _ in devices if "No cameras" not in lbl)
         self.cam_scan_status.setText(
             f"{real_count} device(s) found." if real_count else "No cameras detected."
         )
         self.cam_scan_btn.setEnabled(True)
         logger.info(f"[Setup] Camera scan complete: {devices}")
+
+    def _on_camera_device_changed(self, index: int):
+        """Update resolution dropdown when camera selection changes."""
+        if index < 0 or index >= len(self._camera_devices):
+            return
+            
+        _, _, _, resolutions = self._camera_devices[index]
+        
+        # Save current selection if possible
+        current_res = self.cam_res_combo.currentData()
+        
+        self.cam_res_combo.clear()
+        for w, h in resolutions:
+            self.cam_res_combo.addItem(f"{w} x {h}", (w, h))
+            
+        # Try to restore previous resolution selection
+        if current_res:
+            idx = self.cam_res_combo.findData(current_res)
+            if idx >= 0:
+                self.cam_res_combo.setCurrentIndex(idx)
+        else:
+            # Try from session
+            session_res = self._session.get_session("setup", {}).get("camera_resolution", [640, 480])
+            idx = self.cam_res_combo.findData(tuple(session_res))
+            if idx >= 0:
+                self.cam_res_combo.setCurrentIndex(idx)
+            elif self.cam_res_combo.count() > 0:
+                # Default to middle-ish or last (highest)
+                self.cam_res_combo.setCurrentIndex(self.cam_res_combo.count() - 1)
 
     # ------------------------------------------------------------------
     # Port list helpers

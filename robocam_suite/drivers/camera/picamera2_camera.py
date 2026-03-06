@@ -140,6 +140,7 @@ class Picamera2Camera(Camera):
                 logger.info(f"[Picamera2] Camera Info: {info}")
                 
                 logger.info(f"[Picamera2] Configuring stream: {self._resolution} YUV420 @ {self._fps} FPS")
+                # Note: 'fps' is not a valid argument for create_video_configuration
                 config = self._picamera2.create_video_configuration(
                     main={"size": self._resolution, "format": "YUV420"}
                 )
@@ -147,13 +148,13 @@ class Picamera2Camera(Camera):
                 # Log the config to see what Picamera2 suggested
                 logger.debug(f"[Picamera2] Suggested config: {config}")
                 
-                # Set framerate in the config controls if possible
-                try:
-                    config.controls.update({"FrameRate": self._fps})
-                except Exception as ce:
-                    logger.debug(f"[Picamera2] Could not set FrameRate in config: {ce}")
-                
                 self._picamera2.configure(config)
+                
+                # Set framerate via controls AFTER configure
+                try:
+                    self._picamera2.set_controls({"FrameRate": self._fps})
+                except Exception as ce:
+                    logger.debug(f"[Picamera2] Could not set FrameRate control: {ce}")
                 logger.info("[Picamera2] Configuration applied successfully.")
             except Exception as e:
                 logger.warning(f"[Picamera2] Failed with preferred config, trying default: {e}")
@@ -204,8 +205,10 @@ class Picamera2Camera(Camera):
                         # If the frame is YUV420 (common for IMX477), convert to BGR.
                         # We detect this by checking the shape.
                         # YUV420p has height * 1.5, and 1 channel.
-                        if len(frame.shape) == 2 or (len(frame.shape) == 3 and frame.shape[2] == 1):
-                            frame = cv2.cvtColor(frame, cv2.COLOR_YUV420p2BGR)
+                        if len(frame.shape) == 2: # Planar YUV420
+                            frame = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_I420)
+                        elif len(frame.shape) == 3 and frame.shape[2] == 1: # Also common for YUV
+                            frame = cv2.cvtColor(frame, cv2.COLOR_YUV2BGR_I420)
                         # If it's already 3-channel (RGB), convert to BGR for OpenCV.
                         elif len(frame.shape) == 3 and frame.shape[2] == 3:
                             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
@@ -298,6 +301,10 @@ class Picamera2Camera(Camera):
             self.connect()
 
     def get_supported_resolutions(self) -> list[Tuple[int, int]]:
+        return self.get_supported_resolutions_static()
+
+    @staticmethod
+    def get_supported_resolutions_static() -> list[Tuple[int, int]]:
         """Return common sensor modes for the IMX477 HQ camera."""
         return [
             (640, 480),

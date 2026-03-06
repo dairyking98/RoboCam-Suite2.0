@@ -97,6 +97,10 @@ class OpenCVCamera(Camera):
             self._capture.set(cv2.CAP_PROP_FPS, fps)
 
     def get_supported_resolutions(self) -> list[Tuple[int, int]]:
+        return self.get_supported_resolutions_static()
+
+    @staticmethod
+    def get_supported_resolutions_static() -> list[Tuple[int, int]]:
         """Return common standard resolutions for OpenCV cameras."""
         return [
             (640, 480),
