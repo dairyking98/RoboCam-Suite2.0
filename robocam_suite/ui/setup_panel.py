@@ -46,11 +46,12 @@ ARDUINO_BAUDRATES = [9600, 115200, 57600, 38400, 19200]
 # Player One SDK path bootstrap
 # ---------------------------------------------------------------------------
 
-def _ensure_poa_path() -> None:
+def _ensure_poa_path() -> Optional[str]:
     """Add vendor/playerone/ to sys.path so pyPOACamera can be imported.
 
     The directory is expected at ``<project_root>/vendor/playerone/``.
     This function is idempotent — it only adds the path once.
+    Returns the path to the vendor directory if it exists, else None.
     """
     import sys
     from pathlib import Path
@@ -68,8 +69,10 @@ def _ensure_poa_path() -> None:
             logger.info(f"[PlayerOne] SDK path added to sys.path: {vendor_dir}")
         else:
             logger.info(f"[PlayerOne] SDK path already in sys.path: {vendor_dir}")
+        return str(vendor_dir)
     else:
         logger.warning(f"[PlayerOne] vendor dir not found — SDK not installed. Run: python scripts/install_playerone_sdk.py")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +254,29 @@ class _CameraEnumerator(QThread):
         # _ensure_poa_path() adds that directory to sys.path so the import works.
         logger.info("[CameraEnum] Starting Player One SDK probe...")
         try:
-            _ensure_poa_path()
+            poa_dir = _ensure_poa_path()
+            
+            # Patch the wrapper for Linux/RPi if it's the default one
+            if poa_dir:
+                wrapper_path = os.path.join(poa_dir, "pyPOACamera.py")
+                if os.path.exists(wrapper_path):
+                    try:
+                        with open(wrapper_path, 'r') as f:
+                            content = f.read()
+                        
+                        # If the wrapper is the default one that only looks for .dll
+                        if 'LoadLibrary("./PlayerOneCamera.dll")' in content:
+                            logger.info("[CameraEnum] Patching Player One SDK wrapper for Linux/RPi...")
+                            # Replace the hardcoded .dll path with a more flexible one
+                            new_content = content.replace(
+                                'dll = cdll.LoadLibrary("./PlayerOneCamera.dll")',
+                                'import platform; lib_name = "libPlayerOneCamera.so" if platform.system() == "Linux" else "PlayerOneCamera.dll"; dll = cdll.LoadLibrary(os.path.join(os.path.dirname(__file__), lib_name))'
+                            )
+                            with open(wrapper_path, 'w') as f:
+                                f.write(new_content)
+                    except Exception as e:
+                        logger.warning(f"[CameraEnum] Failed to patch Player One wrapper: {e}")
+
             logger.info("[CameraEnum] Attempting: import pyPOACamera")
             import pyPOACamera as poa  # type: ignore
             logger.info("[CameraEnum] pyPOACamera imported successfully")

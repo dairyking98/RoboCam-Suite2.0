@@ -88,12 +88,17 @@ class Picamera2Camera(Camera):
                         raise e
             
             # Configure the camera
-            # In Picamera2, FPS is often set via the 'main' stream configuration or 
-            # by updating the overall camera configuration.
+            # In Picamera2, FPS is not a key in create_video_configuration.
+            # It is set via the FrameRate control after starting or by the 
+            # configuration's global controls.
             config = self._picamera2.create_video_configuration(
-                main={"size": self._resolution, "format": "XBGR8888", "fps": self._fps}
+                main={"size": self._resolution, "format": "XBGR8888"}
             )
             self._picamera2.configure(config)
+            
+            # Set the framerate
+            self._picamera2.set_controls({"FrameRate": self._fps})
+            
             self._picamera2.start()
             
             # Start background capture thread
