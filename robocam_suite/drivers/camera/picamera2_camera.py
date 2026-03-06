@@ -59,11 +59,32 @@ class Picamera2Camera(Camera):
         if Picamera2 is None:
             raise ImportError("Picamera2 library not found. Ensure you are on a Raspberry Pi with libcamera-python installed.")
 
+        # --- Device Busy Prevention ---
+        # 1. Ensure any previous instance is closed
+        if self._picamera2 is not None:
+            try:
+                self.disconnect()
+            except:
+                pass
+
         try:
             # We pass a camera index if available, default to 0. 
             cam_idx = self._config.get("camera_index", 0)
             logger.info(f"[Picamera2] Initializing camera {cam_idx}...")
-            self._picamera2 = Picamera2(camera_num=cam_idx)
+            
+            # 2. Add a small retry loop for 'Device Busy' errors
+            import time
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    self._picamera2 = Picamera2(camera_num=cam_idx)
+                    break
+                except Exception as e:
+                    if "busy" in str(e).lower() and attempt < max_retries - 1:
+                        logger.warning(f"[Picamera2] Device busy, retrying in 1s... (Attempt {attempt+1}/{max_retries})")
+                        time.sleep(1)
+                    else:
+                        raise e
             
             # Configure the camera
             config = self._picamera2.create_video_configuration(

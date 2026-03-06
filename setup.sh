@@ -30,6 +30,20 @@ pip install --upgrade pip
 echo "==> Installing RoboCam-Suite and its dependencies..."
 pip install -e .
 
+# --- Raspberry Pi HQ Camera (picamera2) ---
+if [[ "$OSTYPE" == "linux-gnueabihf"* ]] || [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    if [ -f /etc/rpi-issue ]; then
+        echo "==> Raspberry Pi detected. Installing picamera2 dependencies..."
+        # We try to install the system-level picamera2 if possible, or use the 
+        # python-picamera2 package if it's available. 
+        # Note: modern RPi OS (Bullseye/Bookworm) uses libcamera.
+        echo "    Installing libcamera and picamera2 Python bindings..."
+        # On modern RPi OS, we can use pip to install picamera2, but it requires 
+        # libcamera-dev and other system dependencies.
+        pip install picamera2 || echo "WARNING: picamera2 pip install failed. Ensure you have libcamera installed."
+    fi
+fi
+
 # Windows-only extras (cv2-enumerate-cameras, wmi) are declared with
 # sys_platform == "win32" markers in requirements.txt so pip skips them
 # automatically on Linux and macOS.  No extra step needed here.
