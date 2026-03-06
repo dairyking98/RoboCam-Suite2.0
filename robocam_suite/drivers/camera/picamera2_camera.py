@@ -131,28 +131,49 @@ class Picamera2Camera(Camera):
                         raise e
             
             # Configure the camera
-            # In Picamera2, FPS is not a key in create_video_configuration.
-            # It is set via the FrameRate control after starting or by the 
-            # configuration's global controls.
-            # We also use a more standard format 'RGB888' which is widely supported.
+            # libcamera/Picamera2 requires specific formats and sizes.
+            # YUV420 is the most native and efficient format for the ISP.
+            # We use it for capture and convert to BGR in the capture loop.
             try:
+                # Log camera info to help debugging
+                info = self._picamera2.camera_info
+                logger.info(f"[Picamera2] Camera Info: {info}")
+                
+                logger.info(f"[Picamera2] Configuring stream: {self._resolution} YUV420 @ {self._fps} FPS")
                 config = self._picamera2.create_video_configuration(
-                    main={"size": self._resolution, "format": "RGB888"}
+                    main={"size": self._resolution, "format": "YUV420"}
                 )
+                
+                # Log the config to see what Picamera2 suggested
+                logger.debug(f"[Picamera2] Suggested config: {config}")
+                
+                # Set framerate in the config controls if possible
+                try:
+                    config.controls.update({"FrameRate": self._fps})
+                except Exception as ce:
+                    logger.debug(f"[Picamera2] Could not set FrameRate in config: {ce}")
+                
                 self._picamera2.configure(config)
+                logger.info("[Picamera2] Configuration applied successfully.")
             except Exception as e:
                 logger.warning(f"[Picamera2] Failed with preferred config, trying default: {e}")
-                # Fallback to a very safe default
-                config = self._picamera2.create_video_configuration()
-                self._picamera2.configure(config)
+                # Fallback to a very safe default (usually 640x480 or similar)
+                try:
+                    config = self._picamera2.create_video_configuration()
+                    self._picamera2.configure(config)
+                    logger.info("[Picamera2] Fallback configuration applied.")
+                except Exception as fe:
+                    logger.error(f"[Picamera2] Fallback configuration also failed: {fe}")
+                    raise fe
             
-            # Set the framerate if supported
             try:
-                self._picamera2.set_controls({"FrameRate": self._fps})
-            except:
-                pass
-            
-            self._picamera2.start()
+                self._picamera2.start()
+                logger.info("[Picamera2] Camera started successfully.")
+            except Exception as se:
+                logger.error(f"[Picamera2] Failed to start camera: {se}")
+                # One last attempt: close and reopen if start fails
+                self._cleanup_resources()
+                raise se
             
             # Start background capture thread
             self._stop_event.clear()

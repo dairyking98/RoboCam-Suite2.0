@@ -447,9 +447,9 @@ class SetupPanel(QWidget):
         self._poll_timer.timeout.connect(self._refresh_status)
         self._poll_timer.start(2000)
         self._refresh_status()
-
-        # Enumerate cameras in background immediately
-        self._enumerate_cameras()
+        
+        # Automatic camera scan on startup
+        QTimer.singleShot(500, self._enumerate_cameras)
 
     # ------------------------------------------------------------------
     # Group builders
