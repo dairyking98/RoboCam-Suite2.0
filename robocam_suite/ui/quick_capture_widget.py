@@ -64,12 +64,16 @@ class _VideoRecorderThread(QThread):
             self.error.emit("Camera is not connected.")
             return
 
-        first_frame = camera.read_frame()
-        if first_frame is None:
-            self.error.emit("Could not read a frame from the camera.")
-            return
-
-        h, w = first_frame.shape[:2]
+        # Use the actual camera resolution for the video writer
+        w, h = camera.get_resolution()
+        if w == 0 or h == 0:
+            # Fallback to frame shape if resolution is unknown
+            first_frame = camera.read_frame()
+            if first_frame is None:
+                self.error.emit("Could not read a frame from the camera.")
+                return
+            h, w = first_frame.shape[:2]
+        
         fourcc = cv2.VideoWriter_fourcc(*"MJPG")
         writer = cv2.VideoWriter(self.output_path, fourcc, self.fps, (w, h))
 

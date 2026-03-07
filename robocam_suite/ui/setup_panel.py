@@ -995,13 +995,8 @@ class SetupPanel(QWidget):
             return
         label, driver, device_id = self._camera_devices[sel_idx]
 
-        # imaging_device entries that survived deduplication are truly WIA-only
-        # (e.g. scanners) and cannot be opened by OpenCV.  Show a warning and
-        # do nothing so the hardware manager is not left in a broken state.
         if driver == "imaging_device":
             from PySide6.QtWidgets import QMessageBox
-            # Check if this looks like a Player One camera so we can give
-            # a more specific fix instruction.
             label_lower = label.lower()
             is_poa = any(k in label_lower for k in ("player one", "playerone", "poa", "mars", "neptune", "uranus", "saturn", "jupiter"))
             if is_poa:
@@ -1025,15 +1020,7 @@ class SetupPanel(QWidget):
             )
             return
 
-        # Disconnect the existing camera instance so the next get_camera() call
-        # creates a fresh one with the updated config.
-        if self._hw._camera is not None:
-            try:
-                self._hw._camera.disconnect()
-            except Exception:
-                pass
-            self._hw._camera = None
-
+        # Update config FIRST so the fresh instance picks it up
         res = self.cam_res_combo.currentData()
         cam_params = {"driver": driver, "camera_index": device_id}
         if res:
@@ -1048,6 +1035,14 @@ class SetupPanel(QWidget):
         })
         logger.info(f"Camera config updated: driver={driver}, device_id={device_id} ({label})")
 
+        # Disconnect existing instance
+        if self._hw._camera is not None:
+            try:
+                self._hw._camera.disconnect()
+            except Exception:
+                pass
+            self._hw._camera = None
+
         # Reconnect with the new settings.
         # We add a small delay to ensure the OS has fully released the camera.
         from PySide6.QtCore import QTimer
@@ -1055,6 +1050,7 @@ class SetupPanel(QWidget):
 
     def _reconnect_camera_delayed(self):
         try:
+            # get_camera() will create a fresh instance with the updated config
             cam = self._hw.get_camera()
             cam.connect()
             logger.info("[Setup] Camera reconnected successfully.")

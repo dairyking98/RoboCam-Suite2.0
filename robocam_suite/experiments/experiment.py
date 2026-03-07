@@ -63,18 +63,22 @@ class _WellRecorder:
         self._thread.start()
 
     def _run(self):
-        first_frame = None
-        for _ in range(10):
-            first_frame = self._camera.read_frame()
-            if first_frame is not None:
-                break
-            time.sleep(0.05)
+        # Use the actual camera resolution for the video writer
+        w, h = self._camera.get_resolution()
+        if w == 0 or h == 0:
+            # Fallback to frame shape if resolution is unknown
+            first_frame = None
+            for _ in range(10):
+                first_frame = self._camera.read_frame()
+                if first_frame is not None:
+                    break
+                time.sleep(0.05)
 
-        if first_frame is None:
-            logger.error("[WellRecorder] Could not read a frame — skipping recording.")
-            return
-
-        h, w = first_frame.shape[:2]
+            if first_frame is None:
+                logger.error("[WellRecorder] Could not read a frame — skipping recording.")
+                return
+            h, w = first_frame.shape[:2]
+        
         fourcc = cv2.VideoWriter_fourcc(*"MJPG")
         writer = cv2.VideoWriter(self._output_path, fourcc, self._fps, (w, h))
 

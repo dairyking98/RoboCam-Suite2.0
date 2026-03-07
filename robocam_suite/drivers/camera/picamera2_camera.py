@@ -140,7 +140,8 @@ class Picamera2Camera(Camera):
                 logger.info(f"[Picamera2] Camera Info: {info}")
                 
                 logger.info(f"[Picamera2] Configuring stream: {self._resolution} YUV420 @ {self._fps} FPS")
-                # Note: 'fps' is not a valid argument for create_video_configuration
+                # In some Picamera2 versions, 'fps' is accepted in create_video_configuration
+                # In others, it's set via FrameRate control. We'll try both.
                 config = self._picamera2.create_video_configuration(
                     main={"size": self._resolution, "format": "YUV420"}
                 )
