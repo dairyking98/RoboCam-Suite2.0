@@ -355,7 +355,9 @@ class ExperimentPanel(QWidget):
         # Camera frame grabber
         self._grabber = _FrameGrabber(fps=15)
         self._grabber.frame_ready.connect(self._live_preview.update_frame)
+        self._grabber.frame_ready.connect(lambda _: self._update_resolution_label())
         self._grabber.camera_disconnected.connect(self._live_preview.show_disconnected)
+        self._grabber.camera_disconnected.connect(self._update_resolution_label)
         self._grabber.start()
         
         # Initial resolution
@@ -367,6 +369,9 @@ class ExperimentPanel(QWidget):
             res = camera.get_resolution()
             self.res_label.setText(f"Output: {res[0]}x{res[1]} px")
             self.res_label.setStyleSheet("font-weight: bold; color: #4CAF50;")
+        elif "Running" in self.status_label.text():
+            # Don't show offline during experiment
+            pass
         else:
             self.res_label.setText("Output: Camera Offline")
             self.res_label.setStyleSheet("color: #f44336;")

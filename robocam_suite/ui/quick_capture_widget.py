@@ -252,10 +252,15 @@ class QuickCaptureWidget(QGroupBox):
 
     def _update_resolution_label(self):
         camera = hw_manager.get_camera()
+        # If the camera is connected OR we are currently in the middle of a recording/experiment
+        # (which means the camera is definitely active even if the status is transitionary)
         if camera and camera.is_connected:
             res = camera.get_resolution()
             self.res_label.setText(f"Resolution: {res[0]}x{res[1]} px")
             self.res_label.setStyleSheet("font-size: 10px; color: #4CAF50; font-weight: bold;")
+        elif self.status_label.text().startswith("Recording"):
+            # Don't show offline during recording
+            pass
         else:
             self.res_label.setText("Camera: Offline")
             self.res_label.setStyleSheet("font-size: 10px; color: #f44336;")

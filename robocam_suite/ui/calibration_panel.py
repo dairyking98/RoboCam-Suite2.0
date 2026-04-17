@@ -83,6 +83,8 @@ class _FrameGrabber(QThread):
                     _was_connected = True
                     frame = camera.read_frame()
                     if frame is not None:
+                        # If we just got a frame, we are definitely connected
+                        _was_connected = True
                         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         h, w, ch = rgb.shape
                         qimg = QImage(
@@ -325,7 +327,9 @@ class CalibrationPanel(QWidget):
         # Camera frame grabber
         self._grabber = _FrameGrabber(fps=15)
         self._grabber.frame_ready.connect(self._live_preview.update_frame)
+        self._grabber.frame_ready.connect(lambda _: self.quick_capture._update_resolution_label())
         self._grabber.camera_disconnected.connect(self._live_preview.show_disconnected)
+        self._grabber.camera_disconnected.connect(self.quick_capture._update_resolution_label)
         self._grabber.start()
 
         self._last_custom_step = "1.0"
