@@ -458,7 +458,9 @@ class PlayerOneCamera(Camera):
             self._config["exposure_us"] = us
             return
         if self.is_connected:
-            self._poa.SetExp(self._cam_id, int(us), False)
+            # Ensure integer casting to avoid SDK TypeError
+            val = int(round(float(us)))
+            self._poa.SetExp(self._cam_id, val, False)
 
     def get_gain(self) -> int:
         if self._simulate or not self.is_connected:
@@ -471,7 +473,9 @@ class PlayerOneCamera(Camera):
             self._config["gain"] = gain
             return
         if self.is_connected:
-            self._poa.SetGain(self._cam_id, int(gain), False)
+            # Ensure integer casting to avoid SDK TypeError
+            val = int(round(float(gain)))
+            self._poa.SetGain(self._cam_id, val, False)
 
     # ------------------------------------------------------------------
     # Advanced SDK Controls
@@ -486,7 +490,10 @@ class PlayerOneCamera(Camera):
     def set_auto_exposure(self, enabled: bool) -> None:
         if self.is_connected:
             current_us = self.get_exposure()
-            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_EXPOSURE, float(current_us), bool(enabled))
+            # Ensure proper casting for SDK
+            val = float(current_us)
+            is_auto = bool(enabled)
+            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_EXPOSURE, val, is_auto)
 
     def get_auto_gain(self) -> bool:
         if self._simulate or not self.is_connected:
@@ -497,7 +504,10 @@ class PlayerOneCamera(Camera):
     def set_auto_gain(self, enabled: bool) -> None:
         if self.is_connected:
             current_gain = self.get_gain()
-            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_GAIN, float(current_gain), bool(enabled))
+            # Ensure proper casting for SDK
+            val = float(current_gain)
+            is_auto = bool(enabled)
+            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_GAIN, val, is_auto)
 
     def get_target_brightness(self) -> int:
         if self._simulate or not self.is_connected:
@@ -507,7 +517,9 @@ class PlayerOneCamera(Camera):
 
     def set_target_brightness(self, value: int) -> None:
         if self.is_connected:
-            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_AUTOEXPO_BRIGHTNESS, float(value), False)
+            # Ensure proper casting for SDK
+            val = float(value)
+            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_AUTOEXPO_BRIGHTNESS, val, False)
 
     def get_usb_bandwidth(self) -> int:
         if self._simulate or not self.is_connected:
@@ -517,7 +529,9 @@ class PlayerOneCamera(Camera):
 
     def set_usb_bandwidth(self, value: int) -> None:
         if self.is_connected:
-            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_USB_BANDWIDTH_LIMIT, float(value), False)
+            # Ensure proper casting for SDK
+            val = float(value)
+            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_USB_BANDWIDTH_LIMIT, val, False)
 
     def get_hardware_bin(self) -> bool:
         if self._simulate or not self.is_connected:
@@ -527,7 +541,9 @@ class PlayerOneCamera(Camera):
 
     def set_hardware_bin(self, enabled: bool) -> None:
         if self.is_connected:
-            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_HARDWARE_BIN, float(enabled), False)
+            # Ensure proper casting for SDK
+            val = float(enabled)
+            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_HARDWARE_BIN, val, False)
 
     @property
     def is_connected(self) -> bool:
