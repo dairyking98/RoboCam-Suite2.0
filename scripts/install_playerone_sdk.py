@@ -47,12 +47,12 @@ EXTRACT_MAP: dict[str, dict[str, str]] = {
         "lib/x64/libPlayerOneCamera.so.3":           "libPlayerOneCamera.so.3",
         "lib/x64/libPlayerOneCamera.so":             "libPlayerOneCamera.so",
         # Support for Raspberry Pi (ARM)
-        "lib/armv7/libPlayerOneCamera.so.3.10.0":    "libPlayerOneCamera.so.3.10.0",
-        "lib/armv7/libPlayerOneCamera.so.3":         "libPlayerOneCamera.so.3",
-        "lib/armv7/libPlayerOneCamera.so":           "libPlayerOneCamera.so",
-        "lib/armv8/libPlayerOneCamera.so.3.10.0":    "libPlayerOneCamera.so.3.10.0",
-        "lib/armv8/libPlayerOneCamera.so.3":         "libPlayerOneCamera.so.3",
-        "lib/armv8/libPlayerOneCamera.so":           "libPlayerOneCamera.so",
+        "lib/arm32/libPlayerOneCamera.so.3.10.0":    "libPlayerOneCamera.so.3.10.0",
+        "lib/arm32/libPlayerOneCamera.so.3":         "libPlayerOneCamera.so.3",
+        "lib/arm32/libPlayerOneCamera.so":           "libPlayerOneCamera.so",
+        "lib/arm64/libPlayerOneCamera.so.3.10.0":    "libPlayerOneCamera.so.3.10.0",
+        "lib/arm64/libPlayerOneCamera.so.3":         "libPlayerOneCamera.so.3",
+        "lib/arm64/libPlayerOneCamera.so":           "libPlayerOneCamera.so",
     },
     "Darwin": {
         "python/pyPOACamera.py":                          "pyPOACamera.py",
@@ -133,12 +133,11 @@ def _extract_tar(data: bytes, extract_map: dict[str, str], dest: Path):
         members = tf.getnames()
         arch = platform.machine().lower() # e.g. 'x86_64', 'aarch64', 'armv7l'
         
-        # Priority order for architectures in the SDK
-        # For aarch64/arm64, we prefer armv8, then armv7, then x64 (which will fail later)
+        # Priority order for architectures in the SDK based on debug listing
         if arch in ["aarch64", "arm64"]:
-            preferred_archs = ["armv8", "armv7", "x64"]
-        elif arch.startswith("armv7"):
-            preferred_archs = ["armv7", "x64"]
+            preferred_archs = ["arm64", "arm32", "x64"]
+        elif arch.startswith("arm"):
+            preferred_archs = ["arm32", "x64"]
         else:
             preferred_archs = ["x64"]
 
@@ -155,8 +154,7 @@ def _extract_tar(data: bytes, extract_map: dict[str, str], dest: Path):
         for base in lib_basenames:
             found_best = False
             for p_arch in preferred_archs:
-                # We need to find the full path in the tar that ends with lib/{p_arch}/{base}
-                # e.g. "PlayerOne_Camera_SDK_Linux_V3.10.0/lib/armv8/libPlayerOneCamera.so"
+                # Based on debug listing, path is: PlayerOne_Camera_SDK_Linux_V3.10.0/lib/arm64/libPlayerOneCamera.so
                 src_pattern = f"lib/{p_arch}/{base}"
                 match = next((m for m in members if m.endswith(src_pattern)), None)
                 if match:
