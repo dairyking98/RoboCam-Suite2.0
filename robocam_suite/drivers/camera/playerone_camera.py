@@ -389,17 +389,54 @@ class PlayerOneCamera(Camera):
         # informational purposes only.
 
     def get_supported_resolutions(self) -> list[Tuple[int, int]]:
-        return self.get_supported_resolutions_static()
+        """Return supported resolutions based on camera properties."""
+        if self._simulate:
+            return self.get_supported_resolutions_static()
+        
+        if not self.is_connected:
+            return self.get_supported_resolutions_static()
+
+        # The Player One SDK supports arbitrary ROI (Region of Interest) sizes.
+        # We provide the native resolution and some common aspect-ratio scaled ones.
+        poa = self._poa
+        err, props = poa.GetCameraProperties(self._cam_index)
+        if err != poa.POAErrors.POA_OK:
+            return self.get_supported_resolutions_static()
+
+        max_w, max_h = props.maxWidth, props.maxHeight
+        
+        # Common standard resolutions that fit within this sensor
+        standards = [
+            (640, 480),
+            (800, 600),
+            (1024, 768),
+            (1280, 720),
+            (1280, 960),
+            (1600, 1200),
+            (1920, 1080)
+        ]
+        
+        res = []
+        for w, h in standards:
+            if w <= max_w and h <= max_h:
+                res.append((w, h))
+        
+        # Always include the native max resolution
+        native = (max_w, max_h)
+        if native not in res:
+            res.append(native)
+            
+        res.sort(key=lambda x: x[0] * x[1])
+        return res
 
     @staticmethod
     def get_supported_resolutions_static() -> list[Tuple[int, int]]:
-        """Return supported resolutions from the camera properties."""
-        # For now, we return some common ones.
+        """Fallback static list if camera is not connected."""
         return [
             (640, 480),
             (1280, 720),
             (1920, 1080),
-            (1936, 1100) # Mars-M/C default
+            (1936, 1100)
         ]
 
     # ------------------------------------------------------------------
