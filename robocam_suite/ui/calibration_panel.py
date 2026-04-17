@@ -590,9 +590,19 @@ class CalibrationPanel(QWidget):
         return grp
 
     def _refresh_camera_controls(self):
+        """
+        Refresh the UI with the camera's current hardware settings, 
+        OR apply the session's saved settings to the hardware if they differ.
+        """
         camera = hw_manager.get_camera()
         if camera.is_connected:
-            # Block signals so we don't trigger set_exposure/gain while reading
+            # If we just connected, we might want to PUSH our saved session settings 
+            # to the hardware instead of pulling them from the hardware.
+            # This ensures the camera starts with the user's last-known-good configuration.
+            self._on_camera_params_changed()
+            
+            # Now block signals and refresh the UI values from the hardware 
+            # (to confirm they were applied correctly)
             self.exp_spin.blockSignals(True)
             self.gain_spin.blockSignals(True)
             self.auto_exp_check.blockSignals(True)
@@ -626,35 +636,35 @@ class CalibrationPanel(QWidget):
             self.binning_check.blockSignals(False)
 
     def _on_camera_params_changed(self):
+        # Persist to session immediately so it's not lost
+        self._session.update_session("calibration", {
+            "exposure_ms": self.exp_spin.value(),
+            "gain": self.gain_spin.value(),
+            "auto_exposure": self.auto_exp_check.isChecked(),
+            "auto_gain": self.auto_gain_check.isChecked(),
+            "target_brightness": self.brightness_spin.value(),
+            "usb_bandwidth": self.bandwidth_spin.value(),
+            "hardware_bin": self.binning_check.isChecked(),
+        })
+
         camera = hw_manager.get_camera()
         if camera.is_connected:
             try:
                 # Basic controls
-                camera.set_exposure(self.exp_spin.value() * 1000)
-                camera.set_gain(self.gain_spin.value())
+                camera.set_exposure(int(self.exp_spin.value() * 1000))
+                camera.set_gain(int(self.gain_spin.value()))
                 
                 # Advanced controls
                 if hasattr(camera, 'set_auto_exposure'):
                     camera.set_auto_exposure(self.auto_exp_check.isChecked())
                     camera.set_auto_gain(self.auto_gain_check.isChecked())
-                    camera.set_target_brightness(self.brightness_spin.value())
-                    camera.set_usb_bandwidth(self.bandwidth_spin.value())
+                    camera.set_target_brightness(int(self.brightness_spin.value()))
+                    camera.set_usb_bandwidth(int(self.bandwidth_spin.value()))
                     camera.set_hardware_bin(self.binning_check.isChecked())
                     
                 # Enable/disable spins based on auto state
                 self.exp_spin.setEnabled(not self.auto_exp_check.isChecked())
                 self.gain_spin.setEnabled(not self.auto_gain_check.isChecked())
-
-                # Persist to session
-                self._session.update_session("calibration", {
-                    "exposure_ms": self.exp_spin.value(),
-                    "gain": self.gain_spin.value(),
-                    "auto_exposure": self.auto_exp_check.isChecked(),
-                    "auto_gain": self.auto_gain_check.isChecked(),
-                    "target_brightness": self.brightness_spin.value(),
-                    "usb_bandwidth": self.bandwidth_spin.value(),
-                    "hardware_bin": self.binning_check.isChecked(),
-                })
             except Exception as e:
                 logger.warning(f"[Calibration] Apply camera params failed: {e}")
 
