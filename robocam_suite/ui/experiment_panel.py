@@ -80,9 +80,14 @@ class _FrameGrabber(QThread):
         super().__init__()
         self._fps = fps
         self._running = False
+        self._paused = False
 
     def stop(self):
         self._running = False
+
+    def set_paused(self, paused: bool):
+        self._paused = paused
+        logger.debug(f"[_FrameGrabber] {'Paused' if paused else 'Resumed'}")
 
     def run(self):
         self._running = True
@@ -90,6 +95,10 @@ class _FrameGrabber(QThread):
         camera = hw_manager.get_camera()
         _was_connected = False
         while self._running:
+            if self._paused:
+                self.msleep(100)
+                continue
+                
             try:
                 if camera.is_connected:
                     _was_connected = True
@@ -676,6 +685,11 @@ class ExperimentPanel(QWidget):
         self.experiment_runner.progress.connect(
             lambda msg: self.status_label.setText(f"Status: {msg}")
         )
+        
+        # Pause preview to prevent SDK contention
+        self._grabber.set_paused(True)
+        logger.info("[Experiment] Paused live preview for automated run.")
+
         self.experiment_runner.start()
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -687,6 +701,10 @@ class ExperimentPanel(QWidget):
             self.status_label.setText("Status: Stopping…")
 
     def _on_experiment_finished(self):
+        # Resume preview
+        self._grabber.set_paused(False)
+        logger.info("[Experiment] Resumed live preview after run.")
+
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.status_label.setText("Status: Finished.")

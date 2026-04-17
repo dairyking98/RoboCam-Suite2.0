@@ -59,9 +59,14 @@ class _FrameGrabber(QThread):
         super().__init__()
         self._fps = fps
         self._running = False
+        self._paused = False
 
     def stop(self):
         self._running = False
+
+    def set_paused(self, paused: bool):
+        self._paused = paused
+        logger.debug(f"[_FrameGrabber] {'Paused' if paused else 'Resumed'}")
 
     def run(self):
         self._running = True
@@ -69,6 +74,10 @@ class _FrameGrabber(QThread):
         camera = hw_manager.get_camera()
         _was_connected = False
         while self._running:
+            if self._paused:
+                self.msleep(100)
+                continue
+                
             try:
                 if camera.is_connected:
                     _was_connected = True

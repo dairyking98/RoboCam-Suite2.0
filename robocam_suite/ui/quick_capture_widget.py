@@ -197,6 +197,16 @@ class QuickCaptureWidget(QGroupBox):
             self._set_status("Camera not connected.", error=True)
             return
 
+        # Pause the live preview if we are inside a panel that has one
+        # This prevents SDK resource contention and improves framerate.
+        parent_panel = self.parent()
+        while parent_panel and not hasattr(parent_panel, '_grabber'):
+            parent_panel = parent_panel.parent()
+        
+        if parent_panel and hasattr(parent_panel, '_grabber'):
+            parent_panel._grabber.set_paused(True)
+            logger.info("[QuickCapture] Paused live preview for recording.")
+
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"video_{ts}.avi"
         filepath = str(self._capture_dir / filename)
@@ -216,6 +226,16 @@ class QuickCaptureWidget(QGroupBox):
         if self._recorder and self._recorder.isRunning():
             self._recorder.stop()
             self._recorder.wait(3000)
+        
+        # Resume live preview
+        parent_panel = self.parent()
+        while parent_panel and not hasattr(parent_panel, '_grabber'):
+            parent_panel = parent_panel.parent()
+        
+        if parent_panel and hasattr(parent_panel, '_grabber'):
+            parent_panel._grabber.set_paused(False)
+            logger.info("[QuickCapture] Resumed live preview after recording.")
+
         self._reset_record_buttons()
         self._set_status("Recording stopped.")
 
