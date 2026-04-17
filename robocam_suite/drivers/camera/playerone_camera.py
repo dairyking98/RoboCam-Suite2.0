@@ -490,8 +490,8 @@ class PlayerOneCamera(Camera):
     def set_auto_exposure(self, enabled: bool) -> None:
         if self.is_connected:
             current_us = self.get_exposure()
-            # Ensure proper casting for SDK
-            val = float(current_us)
+            # pyPOACamera.SetConfig expects int for confValue
+            val = int(round(float(current_us)))
             is_auto = bool(enabled)
             self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_EXPOSURE, val, is_auto)
 
@@ -504,8 +504,8 @@ class PlayerOneCamera(Camera):
     def set_auto_gain(self, enabled: bool) -> None:
         if self.is_connected:
             current_gain = self.get_gain()
-            # Ensure proper casting for SDK
-            val = float(current_gain)
+            # pyPOACamera.SetConfig expects int for confValue
+            val = int(round(float(current_gain)))
             is_auto = bool(enabled)
             self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_GAIN, val, is_auto)
 
@@ -517,8 +517,8 @@ class PlayerOneCamera(Camera):
 
     def set_target_brightness(self, value: int) -> None:
         if self.is_connected:
-            # Ensure proper casting for SDK
-            val = float(value)
+            # pyPOACamera.SetConfig expects int for confValue
+            val = int(round(float(value)))
             self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_AUTOEXPO_BRIGHTNESS, val, False)
 
     def get_usb_bandwidth(self) -> int:
@@ -529,8 +529,8 @@ class PlayerOneCamera(Camera):
 
     def set_usb_bandwidth(self, value: int) -> None:
         if self.is_connected:
-            # Ensure proper casting for SDK
-            val = float(value)
+            # pyPOACamera.SetConfig expects int for confValue
+            val = int(round(float(value)))
             self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_USB_BANDWIDTH_LIMIT, val, False)
 
     def get_hardware_bin(self) -> bool:
@@ -541,8 +541,8 @@ class PlayerOneCamera(Camera):
 
     def set_hardware_bin(self, enabled: bool) -> None:
         if self.is_connected:
-            # Ensure proper casting for SDK
-            val = float(enabled)
+            # pyPOACamera.SetConfig expects int for confValue
+            val = int(bool(enabled))
             self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_HARDWARE_BIN, val, False)
 
     @property
