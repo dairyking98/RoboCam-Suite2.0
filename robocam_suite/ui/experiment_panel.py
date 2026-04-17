@@ -92,7 +92,6 @@ class _FrameGrabber(QThread):
     def run(self):
         self._running = True
         interval_ms = max(1, int(1000 / self._fps))
-        camera = hw_manager.get_camera()
         _was_connected = False
         while self._running:
             if self._paused:
@@ -100,7 +99,8 @@ class _FrameGrabber(QThread):
                 continue
                 
             try:
-                if camera.is_connected:
+                camera = hw_manager.get_camera()
+                if camera and camera.is_connected:
                     _was_connected = True
                     frame = camera.read_frame()
                     if frame is not None:
