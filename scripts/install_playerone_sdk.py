@@ -95,22 +95,13 @@ del _os, _sys, _pathlib, _sdk_dir, _lib_name, _lib_path
         content = wrapper_path.read_text(encoding="utf-8")
         lines = content.splitlines()
         
-        # Find the start of the actual definitions (skip original imports and library loading)
-        # The original file usually starts with:
-        # from ctypes import *
-        # import numpy as np
-        # from enum import Enum
-        # dll = cdll.LoadLibrary("./PlayerOneCamera.dll")
-        
         start_idx = 0
         for i, line in enumerate(lines):
-            # Look for the first definition, e.g., "class POABayerPattern(Enum):"
             if "class POABayerPattern" in line:
                 start_idx = i
                 break
         
         if start_idx == 0:
-            # Fallback: look for the first line that doesn't start with from/import/dll/cdll/#
             for i, line in enumerate(lines):
                 s_line = line.strip()
                 if s_line and not s_line.startswith(("from", "import", "dll", "cdll", "#", "'''", '"""')):
@@ -164,6 +155,13 @@ def _extract_tar(data: bytes, dest: Path):
                     (dest / base).write_bytes(content)
                     print(f"  Extracted: {base} (from {src_pattern})")
                     break
+
+        rules_src = "udev/99-player_one_astronomy.rules"
+        match = next((m for m in members if m.endswith(rules_src)), None)
+        if match:
+            content = tf.extractfile(tf.getmember(match)).read()
+            (dest / "99-player_one_astronomy.rules").write_bytes(content)
+            print("  Extracted: 99-player_one_astronomy.rules")
 
 def main():
     os_name = platform.system()
