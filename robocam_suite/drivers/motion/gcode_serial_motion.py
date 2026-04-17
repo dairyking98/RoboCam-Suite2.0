@@ -546,11 +546,11 @@ class GCodeSerialMotionController(MotionController):
             # Lazy test on first move — identical to 1.0 behaviour.
             # The printer has had time to boot by now (first move is always
             # issued well after connect()).
-            logger.info("Testing M400 support on first move...")
+            logger.debug("Testing M400 support on first move...")
             try:
                 self._send_gcode("M400", timeout=5.0)
                 self._m400_supported = True
-                logger.info("M400 wait command supported (firmware supports movement completion detection)")
+                logger.debug("M400 wait command supported (firmware supports movement completion detection)")
                 return
             except (TimeoutError, RuntimeError) as e:
                 self._m400_supported = False
@@ -564,7 +564,7 @@ class GCodeSerialMotionController(MotionController):
 
         if self._m400_supported:
             try:
-                logger.info("Waiting for move completion (M400)...")
+                logger.debug("Waiting for move completion (M400)...")
                 self._send_gcode("M400", timeout=timeout)
                 return
             except (TimeoutError, RuntimeError) as e:

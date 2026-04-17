@@ -194,16 +194,13 @@ class _CameraEnumerator(QThread):
         except Exception as e:
             logger.error(f"[CameraEnum] Unexpected error during camera scan: {e}", exc_info=True)
         if not devices:
-            devices.append(("No cameras detected", "opencv", 0, []))
+            # On RPi, we prefer picamera2 as the default even if no cam is found yet
+            driver = "picamera2" if platform.system() == "Linux" else "opencv"
+            devices.append(("No cameras detected", driver, 0, []))
         self.cameras_found.emit(devices)
 
     def _run_inner(self, devices: list):  # noqa: C901
         os_name = platform.system()
-
-        # Pre-fetch Windows device names once (avoids repeated COM calls)
-        win_names: dict = {}
-        if os_name == "Windows":
-            win_names = self._get_windows_camera_names()
 
         # --- Raspberry Pi HQ Camera (via picamera2) ---
         if os_name == "Linux":
@@ -226,33 +223,6 @@ class _CameraEnumerator(QThread):
             except Exception as e:
                 logger.debug(f"[CameraEnum] Picamera2 probe failed: {e}")
 
-        # --- OpenCV USB / built-in cameras ---
-        # On Windows we use the MSMF backend explicitly to avoid the OrbbecSDK
-        # (obsensor) backend probing every index and printing noisy errors.
-        try:
-            import cv2
-            _backend = cv2.CAP_MSMF if os_name == "Windows" else cv2.CAP_ANY
-            for idx in range(10):
-                cap = cv2.VideoCapture(idx, _backend)
-                if cap is not None and cap.isOpened():
-                    if os_name == "Windows":
-                        raw = win_names.get(idx, "")
-                        name = f"{raw} (index {idx})" if raw else f"USB Camera (index {idx})"
-                    elif os_name == "Linux":
-                        import os
-                        v4l = f"/dev/video{idx}"
-                        name = f"Video device {idx} ({v4l})" if os.path.exists(v4l) else f"Camera {idx}"
-                    elif os_name == "Darwin":
-                        name = f"Camera {idx} (AVFoundation)"
-                    else:
-                        name = f"Camera {idx}"
-                    from robocam_suite.drivers.camera.opencv_camera import OpenCVCamera
-                    res_list = OpenCVCamera.get_supported_resolutions_static()
-                    devices.append((name, "opencv", idx, res_list))
-                    cap.release()
-        except Exception as e:
-            logger.debug(f"[CameraEnum] OpenCV probe failed: {e}")
-
         # --- Player One Astronomy cameras (via pyPOACamera SDK) ---
         # The SDK ships as vendor/playerone/pyPOACamera.py + PlayerOneCamera.dll.
         # _ensure_poa_path() adds that directory to sys.path so the import works.
@@ -265,6 +235,7 @@ class _CameraEnumerator(QThread):
                 wrapper_path = os.path.join(poa_dir, "pyPOACamera.py")
                 if os.path.exists(wrapper_path):
                     try:
+                        import os
                         with open(wrapper_path, 'r') as f:
                             content = f.read()
                         
@@ -301,85 +272,6 @@ class _CameraEnumerator(QThread):
             logger.warning(f"[CameraEnum] pyPOACamera import failed (SDK not installed or DLL missing): {e}")
         except Exception as e:
             logger.error(f"[CameraEnum] PlayerOne probe failed: {e}", exc_info=True)
-
-        # --- Windows Imaging Devices (WIA class: microscopes, scientific cameras) ---
-        # WMI lists devices like the POA MARS 662M under PNPClass="Image" even
-        # though they are fully accessible via cv2.VideoCapture.  We therefore
-        # cross-reference each WIA device against the OpenCV-probed list:
-        #
-        #   * If the device name matches an already-found OpenCV entry, skip it
-        #     (it is already listed with the correct driver=opencv and index).
-        #   * If the device name appears in win_names (resolved by
-        #     cv2-enumerate-cameras / pygrabber) but was NOT opened by the
-        #     VideoCapture loop (e.g. the camera was at an index > 9, or it
-        #     failed to open but is still enumerable), add it as driver=opencv
-        #     with the index from win_names so the hardware manager can connect it.
-        #   * Otherwise add it as driver=imaging_device with the PnP device ID
-        #     and a note that a vendor SDK may be required.
-        if os_name == "Windows":
-            try:
-                imaging_devs = self._get_windows_imaging_devices()
-
-                # Build lookup structures from the OpenCV probe results.
-                opencv_names_lower = {
-                    d[0].split(" (index ")[0].strip().lower()
-                    for d in devices if d[1] == "opencv"
-                }
-                # Also build a lower-case set from playerone entries so we
-                # don't add a WIA duplicate for a camera already found via SDK.
-                playerone_names_lower = {
-                    d[0].split(" (index ")[0].strip().lower()
-                    for d in devices if d[1] == "playerone"
-                }
-                # Reverse map: lower-case name -> OpenCV index (from win_names)
-                win_names_lower_to_idx = {
-                    v.strip().lower(): k for k, v in win_names.items()
-                }
-
-                for dev_name, dev_id in imaging_devs:
-                    dev_lower = dev_name.strip().lower()
-
-                    # Already listed via OpenCV probe — skip.
-                    already_listed = any(
-                        dev_lower in ocv or ocv in dev_lower
-                        for ocv in opencv_names_lower
-                    )
-                    if already_listed:
-                        continue
-
-                    # Already listed via Player One SDK probe — skip.
-                    already_poa = any(
-                        dev_lower in poa or poa in dev_lower
-                        for poa in playerone_names_lower
-                    )
-                    if already_poa:
-                        continue
-
-                    # Known to cv2-enumerate-cameras/win_names but not yet opened —
-                    # promote to driver=opencv so the hardware manager can open it.
-                    if dev_lower in win_names_lower_to_idx:
-                        opencv_idx = win_names_lower_to_idx[dev_lower]
-                        label = f"{dev_name.strip()} (index {opencv_idx})"
-                        devices.append((label, "opencv", opencv_idx))
-                    else:
-                        # Truly WIA-only (scanner, ASCOM device, etc.)
-                        label = f"{dev_name.strip()}  [Imaging Device — may need vendor SDK]"
-                        devices.append((label, "imaging_device", dev_id))
-            except Exception as e:
-                logger.warning(f"[CameraEnum] Windows Imaging Devices scan failed: {e}")
-
-        # --- Raspberry Pi camera via picamera2 ---
-        try:
-            from picamera2 import Picamera2  # type: ignore
-            cams = Picamera2.global_camera_info()
-            for i, info in enumerate(cams):
-                model = info.get("Model", "Pi Camera")
-                label = f"Raspberry Pi Camera — {model} (index {i})"
-                devices.append((label, "picamera2", i))
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.debug(f"[CameraEnum] Picamera2 probe failed: {e}")
 
         # ("No cameras detected" fallback and cameras_found.emit are handled
         #  in run() after _run_inner returns.)
@@ -1209,12 +1101,17 @@ class SetupPanel(QWidget):
 
         # Camera — restore saved label if present; actual list populated after scan
         saved_label = s.get("camera_label", "")
+        saved_driver = s.get("camera_driver", "opencv")
+        saved_id = s.get("camera_index", 0)
+        saved_res = s.get("camera_resolution", [640, 480])
+        
         if saved_label:
+            # Populate _camera_devices with the restored entry to prevent unpacking errors
+            # if the user interacts with the UI before a fresh scan.
+            self._camera_devices = [(saved_label, saved_driver, saved_id, [saved_res])]
             self.cam_device_combo.addItem(saved_label)
             self.cam_scan_status.setText("Previous device restored. Click 'Scan' to refresh.")
-        
-        saved_res = s.get("camera_resolution")
-        if saved_res:
+            
             w, h = saved_res
             self.cam_res_combo.addItem(f"{w} x {h}", tuple(saved_res))
 
