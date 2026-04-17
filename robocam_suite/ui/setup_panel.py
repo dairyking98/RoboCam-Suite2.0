@@ -284,6 +284,7 @@ def _set_status(label: QLabel, connected: bool, disabled: bool = False):
 
 class SetupPanel(QWidget):
     """Hardware configuration and live status panel."""
+    camera_connected = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -925,6 +926,7 @@ class SetupPanel(QWidget):
             cam = self._hw.get_camera()
             cam.connect()
             logger.info("[Setup] Camera reconnected successfully.")
+            self.camera_connected.emit()
             # If the resolution list was empty, populate it now
             if self.cam_res_combo.count() == 0:
                 self._update_resolution_list()

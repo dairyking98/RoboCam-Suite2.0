@@ -443,6 +443,36 @@ class PlayerOneCamera(Camera):
     # is_connected property
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Exposure / Gain Controls
+    # ------------------------------------------------------------------
+
+    def get_exposure(self) -> int:
+        if self._simulate or not self.is_connected:
+            return int(self._config.get("exposure_us", 20000))
+        _, val, _ = self._poa.GetConfig(self._cam_id, self._poa.POAConfig.POA_EXPOSURE)
+        return int(val)
+
+    def set_exposure(self, us: int) -> None:
+        if self._simulate:
+            self._config["exposure_us"] = us
+            return
+        if self.is_connected:
+            self._poa.SetExp(self._cam_id, int(us), False)
+
+    def get_gain(self) -> int:
+        if self._simulate or not self.is_connected:
+            return int(self._config.get("gain", 100))
+        _, val, _ = self._poa.GetConfig(self._cam_id, self._poa.POAConfig.POA_GAIN)
+        return int(val)
+
+    def set_gain(self, gain: int) -> None:
+        if self._simulate:
+            self._config["gain"] = gain
+            return
+        if self.is_connected:
+            self._poa.SetGain(self._cam_id, int(gain), False)
+
     @property
     def is_connected(self) -> bool:
         if self._simulate:

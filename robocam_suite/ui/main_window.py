@@ -67,6 +67,11 @@ class MainWindow(QMainWindow):
         self.calibration_panel.corners_changed.connect(
             self.experiment_panel.sync_from_calibration
         )
+        
+        # Wire camera connection → calibration control refresh
+        self.setup_panel.camera_connected.connect(
+            self.calibration_panel._refresh_camera_controls
+        )
 
         # Attempt initial hardware connection (non-fatal)
         try:

@@ -59,6 +59,22 @@ class Camera(ABC):
         """Return a list of supported (width, height) tuples."""
         return []
 
+    def get_exposure(self) -> int:
+        """Get the current exposure time in microseconds."""
+        return 0
+
+    def set_exposure(self, us: int) -> None:
+        """Set the exposure time in microseconds."""
+        pass
+
+    def get_gain(self) -> int:
+        """Get the current gain value."""
+        return 0
+
+    def set_gain(self, gain: int) -> None:
+        """Set the gain value."""
+        pass
+
     @property
     @abstractmethod
     def is_connected(self) -> bool:

@@ -130,6 +130,8 @@ class _LivePreview(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         w, h = self.width(), self.height()
+        
+        # Draw background or last frame
         if self._pixmap:
             scaled = self._pixmap.scaled(
                 w, h,
@@ -141,6 +143,24 @@ class _LivePreview(QWidget):
             painter.drawPixmap(x_off, y_off, scaled)
         else:
             painter.fillRect(0, 0, w, h, QColor(30, 30, 30))
+
+        # If paused (recording), draw a semi-transparent overlay
+        parent_panel = self.parent()
+        while parent_panel and not hasattr(parent_panel, '_grabber'):
+            parent_panel = parent_panel.parent()
+        
+        if parent_panel and hasattr(parent_panel, '_grabber') and parent_panel._grabber._paused:
+            # Semi-transparent black overlay
+            painter.fillRect(0, 0, w, h, QColor(0, 0, 0, 160))
+            
+            # Red "RECORDING" text
+            painter.setPen(QColor(255, 50, 50))
+            font = painter.font()
+            font.setBold(True)
+            font.setPointSize(24)
+            painter.setFont(font)
+            painter.drawText(0, 0, w, h, Qt.AlignmentFlag.AlignCenter, "● RECORDING\n(Preview Paused)")
+
         painter.end()
 
 
@@ -257,6 +277,7 @@ class CalibrationPanel(QWidget):
         col2_layout.setSpacing(6)
         col2_layout.setContentsMargins(4, 4, 4, 4)
         col2_layout.addWidget(self._build_movement_group())
+        col2_layout.addWidget(self._build_camera_control_group())
         col2_layout.addWidget(self._build_calibration_group())
         col2_layout.addWidget(self._build_save_load_group())
         col2_layout.addWidget(QuickCaptureWidget("Quick Capture"))
@@ -279,6 +300,9 @@ class CalibrationPanel(QWidget):
         col3_layout.addWidget(self.well_map, stretch=1)
 
         splitter.addWidget(col3)
+        
+        # Initial refresh of camera controls
+        QTimer.singleShot(2000, self._refresh_camera_controls)
 
         # Proportions: camera gets ~45%, controls ~30%, map ~25%
         splitter.setSizes([540, 360, 300])
@@ -492,6 +516,57 @@ class CalibrationPanel(QWidget):
         layout.addWidget(update_map_btn, 5, 0, 1, 4)
 
         return grp
+
+    def _build_camera_control_group(self) -> QGroupBox:
+        grp = QGroupBox("Camera Controls")
+        layout = QGridLayout(grp)
+        layout.setSpacing(4)
+        layout.setContentsMargins(6, 6, 6, 6)
+
+        # Exposure
+        layout.addWidget(QLabel("Exposure (ms):"), 0, 0)
+        self.exp_spin = QSpinBox()
+        self.exp_spin.setRange(1, 2000) # 1ms to 2s
+        self.exp_spin.setSingleStep(10)
+        self.exp_spin.setSuffix(" ms")
+        self.exp_spin.valueChanged.connect(self._on_camera_params_changed)
+        layout.addWidget(self.exp_spin, 0, 1)
+
+        # Gain
+        layout.addWidget(QLabel("Gain:"), 1, 0)
+        self.gain_spin = QSpinBox()
+        self.gain_spin.setRange(0, 1000)
+        self.gain_spin.setSingleStep(10)
+        self.gain_spin.valueChanged.connect(self._on_camera_params_changed)
+        layout.addWidget(self.gain_spin, 1, 1)
+
+        # Refresh button
+        refresh_btn = QPushButton("Refresh Controls")
+        refresh_btn.setToolTip("Read current settings from the camera.")
+        refresh_btn.clicked.connect(self._refresh_camera_controls)
+        layout.addWidget(refresh_btn, 2, 0, 1, 2)
+
+        return grp
+
+    def _refresh_camera_controls(self):
+        camera = hw_manager.get_camera()
+        if camera.is_connected:
+            # Block signals so we don't trigger set_exposure/gain while reading
+            self.exp_spin.blockSignals(True)
+            self.gain_spin.blockSignals(True)
+            
+            # SDK uses microseconds, UI uses milliseconds
+            self.exp_spin.setValue(int(camera.get_exposure() / 1000))
+            self.gain_spin.setValue(int(camera.get_gain()))
+            
+            self.exp_spin.blockSignals(False)
+            self.gain_spin.blockSignals(False)
+
+    def _on_camera_params_changed(self):
+        camera = hw_manager.get_camera()
+        if camera.is_connected:
+            camera.set_exposure(self.exp_spin.value() * 1000)
+            camera.set_gain(self.gain_spin.value())
 
     def _build_save_load_group(self) -> QGroupBox:
         grp = QGroupBox("Calibration File")
