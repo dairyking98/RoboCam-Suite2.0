@@ -685,6 +685,7 @@ class ExperimentPanel(QWidget):
         self.experiment_runner.progress.connect(
             lambda msg: self.status_label.setText(f"Status: {msg}")
         )
+        self.experiment_runner.proxy_frame.connect(self._live_preview.update_frame)
         
         # Pause preview to prevent SDK contention
         self._grabber.set_paused(True)

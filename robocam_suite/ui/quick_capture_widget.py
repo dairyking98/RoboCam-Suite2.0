@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLabel, QGroupBox, QFileDialog,
 )
 from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QImage
 
 from robocam_suite.hw_manager import hw_manager
 from robocam_suite.logger import setup_logger
@@ -48,6 +49,7 @@ class _VideoRecorderThread(QThread):
 
     finished = Signal(str)   # emits the saved file path
     error    = Signal(str)   # emits an error message
+    proxy_frame = Signal(QImage)  # emits a low-FPS frame for preview
 
     def __init__(self, output_path: str, fps: float = 30.0):
         super().__init__()
@@ -90,10 +92,22 @@ class _VideoRecorderThread(QThread):
             # Write the initial frame we just captured
             writer.write(first_frame)
             
+            # Emit first proxy frame
+            self._emit_proxy(first_frame)
+            
+            frame_count = 0
+            # Emit proxy frame every N frames to target ~1-2 FPS
+            proxy_interval = max(1, int(self.fps / 2))
+            
             while not self._stop:
                 frame = camera.read_frame()
                 if frame is not None:
                     writer.write(frame)
+                    
+                    frame_count += 1
+                    if frame_count % proxy_interval == 0:
+                        self._emit_proxy(frame)
+                        
                 # Sleep to maintain target FPS
                 self.msleep(int(1000 / self.fps))
         except Exception as e:
@@ -102,6 +116,19 @@ class _VideoRecorderThread(QThread):
             writer.release()
 
         self.finished.emit(self.output_path)
+
+    def _emit_proxy(self, frame):
+        """Convert BGR frame to QImage and emit for preview."""
+        try:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb.shape
+            qimg = QImage(
+                rgb.data.tobytes(), w, h, ch * w,
+                QImage.Format.Format_RGB888
+            )
+            self.proxy_frame.emit(qimg.copy())
+        except Exception as e:
+            logger.debug(f"[_VideoRecorderThread] Proxy emit error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +251,11 @@ class QuickCaptureWidget(QGroupBox):
         self._recorder = _VideoRecorderThread(filepath)
         self._recorder.finished.connect(self._on_video_finished)
         self._recorder.error.connect(lambda msg: self._set_status(msg, error=True))
+        
+        # Connect proxy frame to preview if available
+        if parent_panel and hasattr(parent_panel, '_live_preview'):
+            self._recorder.proxy_frame.connect(parent_panel._live_preview.update_frame)
+            
         self._recorder.start()
 
         self.start_record_btn.setEnabled(False)

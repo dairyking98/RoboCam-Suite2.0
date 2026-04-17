@@ -51,10 +51,11 @@ MODE_IMAGE = "Image Capture"
 class _WellRecorder:
     """Records video from the camera into a file in a background thread."""
 
-    def __init__(self, camera, output_path: str, fps: float = 30.0):
+    def __init__(self, camera, output_path: str, fps: float = 30.0, on_proxy_frame=None):
         self._camera = camera
         self._output_path = output_path
         self._fps = fps
+        self._on_proxy_frame = on_proxy_frame
         self._stop_event = threading.Event()
         self._frames_captured = 0
         self._start_time = None
@@ -92,11 +93,20 @@ class _WellRecorder:
             writer.write(first_frame)
             self._frames_captured += 1
             
+            # Emit first proxy frame
+            self._emit_proxy(first_frame)
+            
+            # Emit proxy frame every N frames to target ~1-2 FPS
+            proxy_interval = max(1, int(self._fps / 2))
+            
             while not self._stop_event.is_set():
                 frame = self._camera.read_frame()
                 if frame is not None:
                     writer.write(frame)
                     self._frames_captured += 1
+                    
+                    if self._frames_captured % proxy_interval == 0:
+                        self._emit_proxy(frame)
                 else:
                     # Brief sleep if no frame received
                     time.sleep(1.0 / (2 * self._fps))
@@ -107,6 +117,23 @@ class _WellRecorder:
             writer.release()
             self._save_metadata()
             logger.info(f"[WellRecorder] Saved {self._output_path} ({self._frames_captured} frames)")
+
+    def _emit_proxy(self, frame):
+        """Convert BGR frame to QImage and call the proxy callback."""
+        if self._on_proxy_frame is None:
+            return
+        try:
+            import cv2
+            from PySide6.QtGui import QImage
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb.shape
+            qimg = QImage(
+                rgb.data.tobytes(), w, h, ch * w,
+                QImage.Format.Format_RGB888
+            )
+            self._on_proxy_frame(qimg.copy())
+        except Exception as e:
+            logger.debug(f"[_WellRecorder] Proxy emit error: {e}")
 
     def _save_metadata(self):
         """Save a JSON metadata file alongside the video."""
@@ -149,6 +176,7 @@ class Experiment:
         well_plate: WellPlate,
         params: Dict[str, Any],
         on_status=None,
+        on_proxy_frame=None,
     ):
         self.hw_manager = hw_manager
         self.well_plate = well_plate
@@ -157,6 +185,7 @@ class Experiment:
         self._stop_requested = False
         # on_status(msg: str) — optional callback for UI status updates
         self._on_status = on_status or (lambda msg: None)
+        self._on_proxy_frame = on_proxy_frame
         self.output_dir = self._create_output_directory()
 
     # ------------------------------------------------------------------
@@ -282,7 +311,7 @@ class Experiment:
             # 2. Start recording
             if camera.is_connected:
                 self._on_status(f"{prefix}Recording {well_id} (laser off — {off_pre:.1f}s)")
-                recorder = _WellRecorder(camera, video_path)
+                recorder = _WellRecorder(camera, video_path, on_proxy_frame=self._on_proxy_frame)
                 logger.info(f"[Experiment] Recording → {video_path}")
             else:
                 logger.warning("[Experiment] Camera not connected — skipping recording.")
