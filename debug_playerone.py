@@ -49,6 +49,13 @@ def debug_playerone():
         import pyPOACamera as poa
         print("SUCCESS: pyPOACamera imported")
         
+        # Check for SDK version if available
+        try:
+            version = poa.GetSDKVersion()
+            print(f"SDK Version: {version}")
+        except Exception as e:
+            print(f"SDK Version: Error calling GetSDKVersion: {e}")
+            
         count = poa.GetCameraCount()
         print(f"Camera count: {count}")
         
