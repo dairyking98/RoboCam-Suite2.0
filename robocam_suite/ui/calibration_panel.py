@@ -327,6 +327,8 @@ class CalibrationPanel(QWidget):
         self._grabber.camera_disconnected.connect(self._live_preview.show_disconnected)
         self._grabber.start()
 
+        self._last_custom_step = "1.0"
+
     def closeEvent(self, event):
         self._grabber.stop()
         self._grabber.wait(1000)
@@ -976,13 +978,18 @@ class CalibrationPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _on_step_btn_clicked(self, btn):
-        """Preset radio clicked — update the text box unless it was the Custom button."""
+        """Preset radio clicked — update the text box or restore custom value."""
         if btn is not self._custom_rb:
             self.step_size_input.setText(btn.text())
             self._session.update_session("calibration", {"step_size": btn.text()})
+        else:
+            # Re-selected "Custom" — restore the last-typed custom value
+            self.step_size_input.setText(self._last_custom_step)
+            self._session.update_session("calibration", {"step_size": self._last_custom_step})
 
     def _on_custom_step_edited(self, text: str):
         """User typed in the custom field — auto-select the Custom radio button."""
+        self._last_custom_step = text
         self._custom_rb.setChecked(True)
         self._session.update_session("calibration", {"step_size": text})
 
@@ -1014,14 +1021,20 @@ class CalibrationPanel(QWidget):
         s = self._session.get_session("calibration")
         step = s.get("step_size", "1.0")
         self.step_size_input.setText(step)
+        
         matched = False
         for btn in self._step_btn_group.buttons():
             if btn is not self._custom_rb and btn.text() == step:
                 btn.setChecked(True)
                 matched = True
                 break
+        
         if not matched:
             self._custom_rb.setChecked(True)
+            self._last_custom_step = step
+        else:
+            # If session loaded a preset, default custom to 1.0 or another sensible default
+            self._last_custom_step = "1.0"
 
         # Load camera settings from session
         self.exp_spin.blockSignals(True)
