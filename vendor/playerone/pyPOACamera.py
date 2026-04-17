@@ -21,11 +21,20 @@ else:
 
 _lib_path = str(_sdk_dir / _lib_name)
 # Use the absolute path to ensure the loader finds it in the vendor directory.
-# On Linux, we use RTLD_GLOBAL to ensure that any dependencies of the .so 
-# (like libusb) can be resolved from the same directory if needed.
+# On Linux, we use RTLD_GLOBAL and temporarily change the working directory 
+# to the SDK folder to help the linker resolve dependencies.
 if _sys.platform == "linux" or _sys.platform == "linux2":
     import ctypes as _ctypes
-    dll = _ctypes.CDLL(_lib_path, mode=_ctypes.RTLD_GLOBAL)
+    _old_cwd = _os.getcwd()
+    try:
+        _os.chdir(str(_sdk_dir))
+        # Ensure the current directory is in LD_LIBRARY_PATH for the duration of the load
+        _old_ld_path = _os.environ.get("LD_LIBRARY_PATH", "")
+        _os.environ["LD_LIBRARY_PATH"] = str(_sdk_dir) + (":" + _old_ld_path if _old_ld_path else "")
+        
+        dll = _ctypes.CDLL(_lib_path, mode=_ctypes.RTLD_GLOBAL)
+    finally:
+        _os.chdir(_old_cwd)
 else:
     dll = cdll.LoadLibrary(_lib_path)
 

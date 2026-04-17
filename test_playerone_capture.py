@@ -26,6 +26,19 @@ def test_capture():
             # Try to list files again
             print(f"Folder contents: {[f.name for f in vendor_dir.iterdir()]}")
             return
+            
+        # Architecture check on Linux
+        if platform.system() == "Linux":
+            import subprocess
+            print("--- Architecture & Dependencies Diagnostic ---")
+            try:
+                print(f"Architecture of {lib_name}:")
+                subprocess.run(["file", str(lib_path)], check=True)
+                print("\nDependencies (ldd):")
+                subprocess.run(["ldd", str(lib_path)], check=True)
+            except Exception as de:
+                print(f"Diagnostic failed: {de}")
+            print("----------------------------------------------")
 
         import pyPOACamera as poa
         print("SDK: pyPOACamera imported successfully.")
