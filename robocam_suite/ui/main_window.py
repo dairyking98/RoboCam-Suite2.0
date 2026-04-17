@@ -72,6 +72,13 @@ class MainWindow(QMainWindow):
         self.setup_panel.camera_connected.connect(
             self.calibration_panel._refresh_camera_controls
         )
+        self.setup_panel.camera_connected.connect(
+            self.experiment_panel._update_resolution_label
+        )
+        # Update QuickCapture resolution label
+        self.setup_panel.camera_connected.connect(
+            self.calibration_panel.quick_capture._update_resolution_label
+        )
 
         # Attempt initial hardware connection (non-fatal)
         try:

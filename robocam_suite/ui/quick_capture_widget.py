@@ -56,11 +56,16 @@ class _VideoRecorderThread(QThread):
         self.output_path = output_path
         self.fps = fps
         self._stop = False
+        self._start_time = None
+        self._end_time = None
+        self._frame_count = 0
 
     def stop(self):
         self._stop = True
 
     def run(self):
+        import time
+        import json
         camera = hw_manager.get_camera()
         if not camera.is_connected:
             self.error.emit("Camera is not connected.")
@@ -68,7 +73,7 @@ class _VideoRecorderThread(QThread):
 
         # Always capture the first frame to determine dimensions and ensure the stream is active
         first_frame = None
-        for _ in range(10): # Try up to 10 times to get a valid frame
+        for _ in range(20): # Try up to 20 times (2 seconds total) to get a valid frame
             first_frame = camera.read_frame()
             if first_frame is not None:
                 break
@@ -88,14 +93,17 @@ class _VideoRecorderThread(QThread):
             self.error.emit(f"Could not open video writer for {self.output_path}")
             return
 
+        self._start_time = time.time()
+        self._frame_count = 0
+        
         try:
             # Write the initial frame we just captured
             writer.write(first_frame)
+            self._frame_count += 1
             
             # Emit first proxy frame
             self._emit_proxy(first_frame)
             
-            frame_count = 0
             # Emit proxy frame every N frames to target ~1-2 FPS
             proxy_interval = max(1, int(self.fps / 2))
             
@@ -103,19 +111,53 @@ class _VideoRecorderThread(QThread):
                 frame = camera.read_frame()
                 if frame is not None:
                     writer.write(frame)
+                    self._frame_count += 1
                     
-                    frame_count += 1
-                    if frame_count % proxy_interval == 0:
+                    if self._frame_count % proxy_interval == 0:
                         self._emit_proxy(frame)
-                        
-                # Sleep to maintain target FPS
-                self.msleep(int(1000 / self.fps))
+                
+                # Dynamic sleep to maintain target FPS
+                elapsed = time.time() - self._start_time
+                expected = self._frame_count / self.fps
+                sleep_time = max(0, expected - elapsed)
+                if sleep_time > 0:
+                    self.msleep(int(sleep_time * 1000))
+                else:
+                    # If we are behind, don't sleep at all
+                    pass
+                    
         except Exception as e:
             self.error.emit(f"Recording error: {str(e)}")
         finally:
+            self._end_time = time.time()
             writer.release()
+            self._save_metadata()
 
         self.finished.emit(self.output_path)
+
+    def _save_metadata(self):
+        """Save a JSON metadata file alongside the video."""
+        import json
+        meta_path = self.output_path.rsplit(".", 1)[0] + "_metadata.json"
+        duration = (self._end_time - self._start_time) if self._start_time and self._end_time else 0
+        
+        camera = hw_manager.get_camera()
+        metadata = {
+            "video_file": os.path.basename(self.output_path),
+            "frames_captured": self._frame_count,
+            "duration_seconds": round(duration, 3),
+            "fps_target": self.fps,
+            "fps_actual": round(self._frame_count / duration, 2) if duration > 0 else 0,
+            "timestamp": datetime.now().isoformat(),
+            "resolution": list(camera.get_resolution()) if camera.is_connected else []
+        }
+        
+        try:
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(metadata, f, indent=2)
+            logger.info(f"[QuickCapture] Metadata saved to {meta_path}")
+        except Exception as e:
+            logger.error(f"[QuickCapture] Failed to save metadata: {e}")
 
     def _emit_proxy(self, frame):
         """Convert BGR frame to QImage and emit for preview."""
@@ -191,11 +233,30 @@ class QuickCaptureWidget(QGroupBox):
         folder_row.addWidget(folder_btn)
         layout.addLayout(folder_row)
 
-        # Row 4 — status
+        # Row 4 — status & resolution
+        status_layout = QHBoxLayout()
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("font-size: 10px;")
         self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
+        status_layout.addWidget(self.status_label, stretch=1)
+        
+        self.res_label = QLabel("")
+        self.res_label.setStyleSheet("font-size: 10px; color: #888;")
+        self.res_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        status_layout.addWidget(self.res_label)
+        
+        layout.addLayout(status_layout)
+        
+        # Initial resolution check
+        self._update_resolution_label()
+
+    def _update_resolution_label(self):
+        camera = hw_manager.get_camera()
+        if camera and camera.is_connected:
+            res = camera.get_resolution()
+            self.res_label.setText(f"{res[0]}x{res[1]} px")
+        else:
+            self.res_label.setText("")
 
     # ------------------------------------------------------------------
     # Image capture

@@ -357,6 +357,17 @@ class ExperimentPanel(QWidget):
         self._grabber.frame_ready.connect(self._live_preview.update_frame)
         self._grabber.camera_disconnected.connect(self._live_preview.show_disconnected)
         self._grabber.start()
+        
+        # Initial resolution
+        self._update_resolution_label()
+
+    def _update_resolution_label(self):
+        camera = hw_manager.get_camera()
+        if camera and camera.is_connected:
+            res = camera.get_resolution()
+            self.res_label.setText(f"{res[0]}x{res[1]} px")
+        else:
+            self.res_label.setText("")
 
     def closeEvent(self, event):
         self._grabber.stop()
@@ -567,9 +578,16 @@ class ExperimentPanel(QWidget):
         btn_row.addWidget(self.stop_btn)
         layout.addLayout(btn_row)
 
+        status_row = QHBoxLayout()
         self.status_label = QLabel("Status: Idle")
         self.status_label.setStyleSheet(STATUS_STYLE)
-        layout.addWidget(self.status_label)
+        status_row.addWidget(self.status_label, stretch=1)
+        
+        self.res_label = QLabel("")
+        self.res_label.setStyleSheet(STATUS_STYLE)
+        self.res_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        status_row.addWidget(self.res_label)
+        layout.addLayout(status_row)
 
         self.start_btn.clicked.connect(self._start_experiment)
         self.stop_btn.clicked.connect(self._stop_experiment)

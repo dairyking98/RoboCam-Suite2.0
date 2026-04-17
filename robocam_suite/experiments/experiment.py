@@ -60,8 +60,19 @@ class _WellRecorder:
         self._frames_captured = 0
         self._start_time = None
         self._end_time = None
+        self._laser_events = [] # list of (timestamp, state)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+
+    def log_laser_event(self, state: bool):
+        """Log a laser state change event with current recording time."""
+        if self._start_time:
+            elapsed = time.time() - self._start_time
+            self._laser_events.append({
+                "time_offset": round(elapsed, 3),
+                "state": "ON" if state else "OFF",
+                "frame_index": self._frames_captured
+            })
 
     def _run(self):
         # Always capture the first frame to determine dimensions and ensure the stream is active
@@ -107,9 +118,14 @@ class _WellRecorder:
                     
                     if self._frames_captured % proxy_interval == 0:
                         self._emit_proxy(frame)
-                else:
-                    # Brief sleep if no frame received
-                    time.sleep(1.0 / (2 * self._fps))
+                
+                # Dynamic sleep to maintain target FPS
+                elapsed = time.time() - self._start_time
+                expected = self._frames_captured / self._fps
+                sleep_time = max(0, expected - elapsed)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                    
         except Exception as e:
             logger.error(f"[WellRecorder] Error during recording: {e}")
         finally:
@@ -148,7 +164,8 @@ class _WellRecorder:
             "fps_target": self._fps,
             "fps_actual": round(self._frames_captured / duration, 2) if duration > 0 else 0,
             "timestamp": datetime.now().isoformat(),
-            "resolution": list(self._camera.get_resolution())
+            "resolution": list(self._camera.get_resolution()),
+            "laser_events": self._laser_events
         }
         
         try:
@@ -323,12 +340,16 @@ class Experiment:
             # 4. Laser ON
             if gpio_enabled:
                 gpio.write_pin(laser_pin, True)
+                if recorder:
+                    recorder.log_laser_event(True)
                 self._on_status(f"{prefix}Recording {well_id} (laser ON — {on_dur:.1f}s)")
             time.sleep(on_dur)
 
             # 5. Laser OFF, post-laser record
             if gpio_enabled:
                 gpio.write_pin(laser_pin, False)
+                if recorder:
+                    recorder.log_laser_event(False)
                 self._on_status(f"{prefix}Recording {well_id} (laser off — {off_post:.1f}s)")
             time.sleep(off_post)
 
