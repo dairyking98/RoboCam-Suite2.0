@@ -155,6 +155,8 @@ def _extract_tar(data: bytes, extract_map: dict[str, str], dest: Path):
         for base in lib_basenames:
             found_best = False
             for p_arch in preferred_archs:
+                # We need to find the full path in the tar that ends with lib/{p_arch}/{base}
+                # e.g. "PlayerOne_Camera_SDK_Linux_V3.10.0/lib/armv8/libPlayerOneCamera.so"
                 src_pattern = f"lib/{p_arch}/{base}"
                 match = next((m for m in members if m.endswith(src_pattern)), None)
                 if match:
