@@ -274,7 +274,7 @@ class _CameraEnumerator(QThread):
                             # Replace the hardcoded .dll path with a more flexible one
                             new_content = content.replace(
                                 'dll = cdll.LoadLibrary("./PlayerOneCamera.dll")',
-                                'import os, platform; lib_name = "libPlayerOneCamera.so" if platform.system() == "Linux" else "PlayerOneCamera.dll"; dll = cdll.LoadLibrary(os.path.join(os.path.dirname(__file__), lib_name))'
+                                'import os, platform; from ctypes import cdll; lib_name = "libPlayerOneCamera.so" if platform.system() == "Linux" else "PlayerOneCamera.dll"; dll = cdll.LoadLibrary(os.path.join(os.path.dirname(__file__), lib_name))'
                             )
                             with open(wrapper_path, 'w') as f:
                                 f.write(new_content)
@@ -993,7 +993,8 @@ class SetupPanel(QWidget):
         sel_idx = self.cam_device_combo.currentIndex()
         if sel_idx < 0 or sel_idx >= len(self._camera_devices):
             return
-        label, driver, device_id = self._camera_devices[sel_idx]
+        # Standardize unpacking to match the 4-element list (label, driver, device_id, resolutions)
+        label, driver, device_id, resolutions = self._camera_devices[sel_idx]
 
         if driver == "imaging_device":
             from PySide6.QtWidgets import QMessageBox
