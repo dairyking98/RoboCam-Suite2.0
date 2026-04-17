@@ -508,6 +508,12 @@ class CalibrationPanel(QWidget):
         load_btn.setToolTip("Load corner positions from a previously saved .json file.")
         load_btn.clicked.connect(self._load_calibration)
         btn_row.addWidget(load_btn)
+
+        update_map_btn = QPushButton("Update Well Map")
+        update_map_btn.setToolTip("Force refresh the well map grid from current corners and dimensions.")
+        update_map_btn.clicked.connect(self._rebuild_well_map)
+        btn_row.addWidget(update_map_btn)
+        
         root.addLayout(btn_row)
 
         # Row 2 — gray path label + ... folder button
@@ -672,6 +678,11 @@ class CalibrationPanel(QWidget):
                 z = top_z + v * (bot_z - top_z)
                 positions.append((x, y, z))
         return positions
+
+    def _rebuild_well_map(self):
+        """Force a rebuild of the well map from current corners and dimensions."""
+        self._generate_well_map()
+        self.corners_changed.emit()
 
     def _generate_well_map(self):
         positions = self._compute_well_positions()

@@ -15,8 +15,12 @@ if _sys.platform == "win32":
 elif _sys.platform == "darwin":
     _lib_name = "libPlayerOneCamera.dylib"
 else:
+    # On Linux/RPi, the library might be libPlayerOneCamera.so, 
+    # but we should also check if we need to load it from the absolute path.
     _lib_name = "libPlayerOneCamera.so"
+
 _lib_path = str(_sdk_dir / _lib_name)
+# Use the absolute path to ensure the loader finds it in the vendor directory
 dll = cdll.LoadLibrary(_lib_path)
 del _os, _sys, _pathlib, _sdk_dir, _lib_name, _lib_path
 

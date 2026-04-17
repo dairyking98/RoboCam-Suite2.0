@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import platform
 import sys
+from typing import Optional
 
 import serial.tools.list_ports
 
@@ -228,30 +229,7 @@ class _CameraEnumerator(QThread):
         # _ensure_poa_path() adds that directory to sys.path so the import works.
         logger.info("[CameraEnum] Starting Player One SDK probe...")
         try:
-            poa_dir = _ensure_poa_path()
-            
-            # Patch the wrapper for Linux/RPi if it's the default one
-            if poa_dir:
-                wrapper_path = os.path.join(poa_dir, "pyPOACamera.py")
-                if os.path.exists(wrapper_path):
-                    try:
-                        import os
-                        with open(wrapper_path, 'r') as f:
-                            content = f.read()
-                        
-                        # If the wrapper is the default one that only looks for .dll
-                        if 'LoadLibrary("./PlayerOneCamera.dll")' in content:
-                            logger.info("[CameraEnum] Patching Player One SDK wrapper for Linux/RPi...")
-                            # Replace the hardcoded .dll path with a more flexible one
-                            new_content = content.replace(
-                                'dll = cdll.LoadLibrary("./PlayerOneCamera.dll")',
-                                'import os, platform; from ctypes import cdll; lib_name = "libPlayerOneCamera.so" if platform.system() == "Linux" else "PlayerOneCamera.dll"; dll = cdll.LoadLibrary(os.path.join(os.path.dirname(__file__), lib_name))'
-                            )
-                            with open(wrapper_path, 'w') as f:
-                                f.write(new_content)
-                    except Exception as e:
-                        logger.warning(f"[CameraEnum] Failed to patch Player One wrapper: {e}")
-
+            _ensure_poa_path()
             logger.info("[CameraEnum] Attempting: import pyPOACamera")
             import pyPOACamera as poa  # type: ignore
             logger.info("[CameraEnum] pyPOACamera imported successfully")
@@ -808,7 +786,7 @@ class SetupPanel(QWidget):
             self.cam_device_combo.setCurrentIndex(idx)
         else:
             # If not found, try to find by driver/index from session
-            session_label = self._session.get_session("setup", {}).get("camera_label", "")
+            session_label = self._session.get_session("setup").get("camera_label", "")
             if session_label:
                 idx = self.cam_device_combo.findText(session_label)
                 if idx >= 0:
@@ -845,7 +823,7 @@ class SetupPanel(QWidget):
                 self.cam_res_combo.setCurrentIndex(idx)
         else:
             # Try from session
-            session_res = self._session.get_session("setup", {}).get("camera_resolution", [640, 480])
+            session_res = self._session.get_session("setup").get("camera_resolution", [640, 480])
             idx = self.cam_res_combo.findData(tuple(session_res))
             if idx >= 0:
                 self.cam_res_combo.setCurrentIndex(idx)
@@ -924,7 +902,7 @@ class SetupPanel(QWidget):
             "camera_driver": driver,
             "camera_index": device_id,
             "camera_label": label,
-            "camera_resolution": res,
+            "camera_resolution": list(res) if res else [640, 480],
         })
         logger.info(f"Camera config updated: driver={driver}, device_id={device_id} ({label})")
 
