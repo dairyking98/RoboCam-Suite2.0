@@ -280,7 +280,8 @@ class CalibrationPanel(QWidget):
         col2_layout.addWidget(self._build_camera_control_group())
         col2_layout.addWidget(self._build_calibration_group())
         col2_layout.addWidget(self._build_save_load_group())
-        col2_layout.addWidget(QuickCaptureWidget("Quick Capture"))
+        self.quick_capture = QuickCaptureWidget("Quick Capture")
+        col2_layout.addWidget(self.quick_capture)
         col2_layout.addStretch()
 
         col2_scroll = QScrollArea()
