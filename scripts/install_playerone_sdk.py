@@ -92,31 +92,45 @@ del _os, _sys, _pathlib, _sdk_dir, _lib_name, _lib_path
 """
     
     try:
-        lines = wrapper_path.read_text(encoding="utf-8").splitlines()
-        # Find the end of the original header (usually after imports)
-        # We look for the first line that doesn't start with from/import or is empty
+        content = wrapper_path.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        
+        # Find the start of the actual definitions (skip original imports and library loading)
+        # The original file usually starts with:
+        # from ctypes import *
+        # import numpy as np
+        # from enum import Enum
+        # dll = cdll.LoadLibrary("./PlayerOneCamera.dll")
+        
         start_idx = 0
         for i, line in enumerate(lines):
-            if line.strip() and not line.startswith(("from", "import", "#")):
+            # Look for the first definition, e.g., "class POABayerPattern(Enum):"
+            if "class POABayerPattern" in line:
                 start_idx = i
                 break
         
+        if start_idx == 0:
+            # Fallback: look for the first line that doesn't start with from/import/dll/cdll/#
+            for i, line in enumerate(lines):
+                s_line = line.strip()
+                if s_line and not s_line.startswith(("from", "import", "dll", "cdll", "#", "'''", '"""')):
+                    start_idx = i
+                    break
+        
         new_content = patch_content + "\n" + "\n".join(lines[start_idx:])
         wrapper_path.write_text(new_content, encoding="utf-8")
-        print("  Patch applied successfully.")
+        print("  Patch applied successfully (original loader removed).")
     except Exception as e:
         print(f"  FAILED to patch wrapper: {e}")
 
 def _extract_zip(data: bytes, dest: Path):
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         names = zf.namelist()
-        # Extract wrapper
         wrapper_match = next((n for n in names if n.endswith("python/pyPOACamera.py")), None)
         if wrapper_match:
             (dest / "pyPOACamera.py").write_bytes(zf.read(wrapper_match))
             print("  Extracted: pyPOACamera.py")
         
-        # Extract DLL (Windows x64)
         dll_match = next((n for n in names if n.endswith("lib/x64/PlayerOneCamera.dll")), None)
         if dll_match:
             (dest / "PlayerOneCamera.dll").write_bytes(zf.read(dll_match))
@@ -127,14 +141,12 @@ def _extract_tar(data: bytes, dest: Path):
         members = tf.getnames()
         arch = platform.machine().lower()
         
-        # 1. Extract Wrapper
         wrapper_match = next((m for m in members if m.endswith("python/pyPOACamera.py")), None)
         if wrapper_match:
             content = tf.extractfile(tf.getmember(wrapper_match)).read()
             (dest / "pyPOACamera.py").write_bytes(content)
             print("  Extracted: pyPOACamera.py")
 
-        # 2. Determine best architecture
         if arch in ["aarch64", "arm64"]:
             preferred = ["arm64", "arm32", "x64"]
         elif arch.startswith("arm"):
@@ -142,7 +154,6 @@ def _extract_tar(data: bytes, dest: Path):
         else:
             preferred = ["x64"]
 
-        # 3. Extract libraries
         lib_bases = ["libPlayerOneCamera.so", "libPlayerOneCamera.so.3", "libPlayerOneCamera.so.3.10.0"]
         for base in lib_bases:
             for p_arch in preferred:
@@ -176,7 +187,6 @@ def main():
     else:
         _extract_tar(data, dest)
 
-    # Always patch the wrapper after extraction
     wrapper_path = dest / "pyPOACamera.py"
     if wrapper_path.exists():
         _patch_wrapper(wrapper_path)
