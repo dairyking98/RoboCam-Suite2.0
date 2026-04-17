@@ -66,7 +66,7 @@ $RECYCLE.BIN/
 
 # Experiment outputs (large data files — keep structure, not data)
 outputs/
-experiments/
+/experiments/
 
 # Logs
 *.log

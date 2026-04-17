@@ -64,16 +64,21 @@ class _VideoRecorderThread(QThread):
             self.error.emit("Camera is not connected.")
             return
 
-        # Use the actual camera resolution for the video writer
-        w, h = camera.get_resolution()
-        if w == 0 or h == 0:
-            # Fallback to frame shape if resolution is unknown
+        # Always capture the first frame to determine dimensions and ensure the stream is active
+        first_frame = None
+        for _ in range(10): # Try up to 10 times to get a valid frame
             first_frame = camera.read_frame()
-            if first_frame is None:
-                self.error.emit("Could not read a frame from the camera.")
-                return
-            h, w = first_frame.shape[:2]
+            if first_frame is not None:
+                break
+            self.msleep(100)
+            
+        if first_frame is None:
+            self.error.emit("Could not read a frame from the camera.")
+            return
+
+        h, w = first_frame.shape[:2]
         
+        # Use MJPG for compatibility and lower CPU overhead on RPi
         fourcc = cv2.VideoWriter_fourcc(*"MJPG")
         writer = cv2.VideoWriter(self.output_path, fourcc, self.fps, (w, h))
 
@@ -82,12 +87,17 @@ class _VideoRecorderThread(QThread):
             return
 
         try:
+            # Write the initial frame we just captured
             writer.write(first_frame)
+            
             while not self._stop:
                 frame = camera.read_frame()
                 if frame is not None:
                     writer.write(frame)
+                # Sleep to maintain target FPS
                 self.msleep(int(1000 / self.fps))
+        except Exception as e:
+            self.error.emit(f"Recording error: {str(e)}")
         finally:
             writer.release()
 

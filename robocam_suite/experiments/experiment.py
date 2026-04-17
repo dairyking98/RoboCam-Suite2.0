@@ -63,22 +63,21 @@ class _WellRecorder:
         self._thread.start()
 
     def _run(self):
-        # Use the actual camera resolution for the video writer
-        w, h = self._camera.get_resolution()
-        if w == 0 or h == 0:
-            # Fallback to frame shape if resolution is unknown
-            first_frame = None
-            for _ in range(10):
-                first_frame = self._camera.read_frame()
-                if first_frame is not None:
-                    break
-                time.sleep(0.05)
+        # Always capture the first frame to determine dimensions and ensure the stream is active
+        first_frame = None
+        for _ in range(20): # Try up to 20 times (1 second total) to get a valid frame
+            first_frame = self._camera.read_frame()
+            if first_frame is not None:
+                break
+            time.sleep(0.05)
 
-            if first_frame is None:
-                logger.error("[WellRecorder] Could not read a frame — skipping recording.")
-                return
-            h, w = first_frame.shape[:2]
+        if first_frame is None:
+            logger.error("[WellRecorder] Could not read a frame — skipping recording.")
+            return
+
+        h, w = first_frame.shape[:2]
         
+        # Use MJPG for compatibility and lower CPU overhead on RPi
         fourcc = cv2.VideoWriter_fourcc(*"MJPG")
         writer = cv2.VideoWriter(self._output_path, fourcc, self._fps, (w, h))
 
@@ -87,22 +86,27 @@ class _WellRecorder:
             return
 
         self._start_time = time.time()
-        writer.write(first_frame)
-        self._frames_captured += 1
         
         try:
+            # Write the initial frame we just captured
+            writer.write(first_frame)
+            self._frames_captured += 1
+            
             while not self._stop_event.is_set():
                 frame = self._camera.read_frame()
                 if frame is not None:
                     writer.write(frame)
                     self._frames_captured += 1
                 else:
-                    time.sleep(1.0 / self._fps)
+                    # Brief sleep if no frame received
+                    time.sleep(1.0 / (2 * self._fps))
+        except Exception as e:
+            logger.error(f"[WellRecorder] Error during recording: {e}")
         finally:
             self._end_time = time.time()
             writer.release()
             self._save_metadata()
-            logger.info(f"[WellRecorder] Saved {self._output_path}")
+            logger.info(f"[WellRecorder] Saved {self._output_path} ({self._frames_captured} frames)")
 
     def _save_metadata(self):
         """Save a JSON metadata file alongside the video."""
