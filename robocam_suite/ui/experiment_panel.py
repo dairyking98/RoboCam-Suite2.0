@@ -545,6 +545,7 @@ class ExperimentPanel(QWidget):
 
         btn_row = QHBoxLayout()
         self.start_btn = QPushButton("Start Experiment")
+        self.start_btn.setEnabled(False)  # Disabled until calibration is synced
         self.start_btn.setToolTip(
             "Begin the automated imaging sequence.\n"
             "Requires all four well-plate corners to be set in the Calibration tab.\n"
@@ -605,30 +606,37 @@ class ExperimentPanel(QWidget):
         """Called by MainWindow whenever calibration changes or on startup."""
         if self.calibration_panel is None:
             self.well_selection.clear_calibration()
+            self.start_btn.setEnabled(False)
             return
 
         corners = self.calibration_panel.get_corners()
+        # A valid calibration requires all 4 corners to be set AND non-zero
         all_set = all(corners.get(name) is not None for name in CORNER_NAMES)
-
-        if not all_set:
-            self.well_selection.clear_calibration()
-            logger.info("[Experiment] Calibration incomplete — well grid cleared.")
-            return
+        
+        # Simple heuristic: if all corners are exactly (0,0,0), it's likely just initialized session data
+        all_zero = False
+        if all_set:
+            corners_list = [corners.get(n) for n in CORNER_NAMES]
+            if all(c == (0.0, 0.0, 0.0) or c == [0.0, 0.0, 0.0] for c in corners_list):
+                all_zero = True
 
         cols, rows = self.calibration_panel.get_well_dimensions()
-        if rows == 0 or cols == 0:
+        
+        if not all_set or all_zero or rows == 0 or cols == 0:
             self.well_selection.clear_calibration()
-            logger.info("[Experiment] Well dimensions not set — well grid cleared.")
-            return
-            
-        # Also check if corner values are non-zero (simple heuristic for "not actually calibrated")
-        corners_list = [corners.get(n) for n in CORNER_NAMES]
-        if all(c == (0.0, 0.0, 0.0) for c in corners_list):
-            self.well_selection.clear_calibration()
-            logger.info("[Experiment] All corners are 0,0,0 — assuming uncalibrated.")
+            self.start_btn.setEnabled(False)
+            self.start_btn.setToolTip("Please complete calibration in the Calibration tab first.")
+            if not all_set:
+                logger.info("[Experiment] Calibration incomplete — well grid cleared.")
+            elif all_zero:
+                logger.info("[Experiment] All corners are 0,0,0 — assuming uncalibrated.")
+            else:
+                logger.info("[Experiment] Well dimensions not set — well grid cleared.")
             return
 
         self.well_selection.rebuild(rows, cols)
+        self.start_btn.setEnabled(True)
+        self.start_btn.setToolTip("Begin the automated imaging sequence.")
         logger.info(f"[Experiment] Synced well grid: {rows} rows \u00d7 {cols} cols")
     # ------------------------------------------------------------------
     # Experiment control
