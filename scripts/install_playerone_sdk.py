@@ -73,7 +73,27 @@ def _vendor_dir() -> Path:
 
 def _already_installed() -> bool:
     vd = _vendor_dir()
-    return (vd / "pyPOACamera.py").exists()
+    # If the folder exists, we check if the .so is for the right architecture
+    if not (vd / "pyPOACamera.py").exists():
+        return False
+    
+    # Simple check: if we are on Linux and have an x86 .so on an ARM machine, we need to reinstall
+    if platform.system() == "Linux":
+        lib_path = vd / "libPlayerOneCamera.so"
+        if lib_path.exists():
+            # Run 'file' to check architecture
+            import subprocess
+            try:
+                out = subprocess.check_output(["file", str(lib_path)], stderr=subprocess.STDOUT).decode()
+                arch = platform.machine().lower()
+                is_arm = "aarch64" in arch or "arm" in arch
+                is_x86 = "x86-64" in out or "x86_64" in out
+                if is_arm and is_x86:
+                    print("  Detected x86 library on ARM system. Reinstalling correct architecture...")
+                    return False
+            except Exception:
+                pass
+    return True
 
 
 def _download(url: str) -> bytes:
@@ -99,11 +119,8 @@ def _extract_zip(data: bytes, extract_map: dict[str, str], dest: Path):
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         names = zf.namelist()
         for src_path, dst_name in extract_map.items():
-            # Allow partial match (e.g. "python/pyPOACamera.py" matches
-            # "PlayerOne_Camera_SDK_Windows_V3.10.0/python/pyPOACamera.py")
             match = next((n for n in names if n.endswith(src_path)), None)
             if match is None:
-                print(f"  WARNING: {src_path!r} not found in archive — skipping.")
                 continue
             content = zf.read(match)
             out = dest / dst_name
@@ -114,44 +131,40 @@ def _extract_zip(data: bytes, extract_map: dict[str, str], dest: Path):
 def _extract_tar(data: bytes, extract_map: dict[str, str], dest: Path):
     with tarfile.open(fileobj=io.BytesIO(data)) as tf:
         members = tf.getnames()
-        
-        # Determine architecture for Linux
         arch = platform.machine().lower() # e.g. 'x86_64', 'aarch64', 'armv7l'
         
-        for src_path, dst_name in extract_map.items():
-            # If we are on Linux, we want to skip the wrong architectures
-            if platform.system() == "Linux":
-                if "lib/" in src_path:
-                    if "x64" in src_path and arch not in ["x86_64", "amd64"]:
-                        continue
-                    if "armv8" in src_path and arch not in ["aarch64", "arm64"]:
-                        continue
-                    if "armv7" in src_path and not arch.startswith("armv7"):
-                        continue
+        # Priority order for architectures in the SDK
+        # For aarch64/arm64, we prefer armv8, then armv7, then x64 (which will fail later)
+        if arch in ["aarch64", "arm64"]:
+            preferred_archs = ["armv8", "armv7", "x64"]
+        elif arch.startswith("armv7"):
+            preferred_archs = ["armv7", "x64"]
+        else:
+            preferred_archs = ["x64"]
 
-            match = next((m for m in members if m.endswith(src_path)), None)
-            if match is None:
-                # Only warn if it's the Python wrapper or the correct architecture
-                if "pyPOACamera.py" in src_path:
-                    print(f"  WARNING: {src_path!r} not found in archive — skipping.")
-                continue
-                
-            member = tf.getmember(match)
-            f = tf.extractfile(member)
-            if f is None:
-                continue
-            content = f.read()
-            out = dest / dst_name
-            
-            # If the file already exists, only overwrite if it's a better match for our arch
-            if out.exists():
-                # Simple heuristic: if we already extracted something and we are here, 
-                # it means we found another match. Since we iterate in order, 
-                # we should probably prefer the one that matches our arch.
-                pass
+        # 1. Extract the Python wrapper (it's the same for all archs)
+        wrapper_src = "python/pyPOACamera.py"
+        match = next((m for m in members if m.endswith(wrapper_src)), None)
+        if match:
+            content = tf.extractfile(tf.getmember(match)).read()
+            (dest / "pyPOACamera.py").write_bytes(content)
+            print(f"  Extracted: pyPOACamera.py")
 
-            out.write_bytes(content)
-            print(f"  Extracted: {dst_name} (from {src_path})")
+        # 2. Extract the library for the best matching architecture
+        lib_basenames = ["libPlayerOneCamera.so", "libPlayerOneCamera.so.3", "libPlayerOneCamera.so.3.10.0"]
+        for base in lib_basenames:
+            found_best = False
+            for p_arch in preferred_archs:
+                src_pattern = f"lib/{p_arch}/{base}"
+                match = next((m for m in members if m.endswith(src_pattern)), None)
+                if match:
+                    content = tf.extractfile(tf.getmember(match)).read()
+                    (dest / base).write_bytes(content)
+                    print(f"  Extracted: {base} (from {src_pattern})")
+                    found_best = True
+                    break
+            if not found_best:
+                print(f"  WARNING: Could not find {base} for any preferred architecture {preferred_archs}")
 
 
 def main():
@@ -170,14 +183,11 @@ def main():
     dest = _vendor_dir()
     dest.mkdir(parents=True, exist_ok=True)
 
-    print(f"Installing Player One Camera SDK for {os_name} …")
+    print(f"Installing Player One Camera SDK for {os_name} ({platform.machine()}) …")
     try:
         data = _download(url)
     except Exception as e:
         print(f"  ERROR: Download failed: {e}")
-        print("  Please download the SDK manually from:")
-        print(f"  {url}")
-        print("  and extract pyPOACamera.py + the native library into vendor/playerone/")
         sys.exit(1)
 
     if url.endswith(".zip"):
@@ -186,7 +196,6 @@ def main():
         _extract_tar(data, extract_map, dest)
 
     print(f"\nPlayer One SDK installed to: {dest}")
-    print("You can now use 'playerone' as the camera driver in the Setup tab.")
 
 
 if __name__ == "__main__":
