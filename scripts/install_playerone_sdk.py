@@ -192,6 +192,18 @@ def main():
         print(f"  ERROR: Download failed: {e}")
         sys.exit(1)
 
+    # DEBUG: List all files in the archive to see the exact structure
+    print("\n--- SDK Archive Structure (Debug) ---")
+    if url.endswith(".zip"):
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            for name in zf.namelist()[:50]: # First 50 files
+                print(f"  {name}")
+    else:
+        with tarfile.open(fileobj=io.BytesIO(data)) as tf:
+            for name in tf.getnames()[:100]: # First 100 files
+                print(f"  {name}")
+    print("------------------------------------\n")
+
     if url.endswith(".zip"):
         _extract_zip(data, extract_map, dest)
     else:
