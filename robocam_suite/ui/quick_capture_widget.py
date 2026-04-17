@@ -254,9 +254,11 @@ class QuickCaptureWidget(QGroupBox):
         camera = hw_manager.get_camera()
         if camera and camera.is_connected:
             res = camera.get_resolution()
-            self.res_label.setText(f"{res[0]}x{res[1]} px")
+            self.res_label.setText(f"Resolution: {res[0]}x{res[1]} px")
+            self.res_label.setStyleSheet("font-size: 10px; color: #4CAF50; font-weight: bold;")
         else:
-            self.res_label.setText("")
+            self.res_label.setText("Camera: Offline")
+            self.res_label.setStyleSheet("font-size: 10px; color: #f44336;")
 
     # ------------------------------------------------------------------
     # Image capture

@@ -365,9 +365,11 @@ class ExperimentPanel(QWidget):
         camera = hw_manager.get_camera()
         if camera and camera.is_connected:
             res = camera.get_resolution()
-            self.res_label.setText(f"{res[0]}x{res[1]} px")
+            self.res_label.setText(f"Output: {res[0]}x{res[1]} px")
+            self.res_label.setStyleSheet("font-weight: bold; color: #4CAF50;")
         else:
-            self.res_label.setText("")
+            self.res_label.setText("Output: Camera Offline")
+            self.res_label.setStyleSheet("color: #f44336;")
 
     def closeEvent(self, event):
         self._grabber.stop()
