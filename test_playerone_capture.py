@@ -17,10 +17,22 @@ def test_capture():
         sys.path.insert(0, str(vendor_dir))
     
     try:
+        print(f"Loading library from: {vendor_dir}")
+        # Explicitly check for file existence again to be sure
+        lib_name = "libPlayerOneCamera.so" if platform.system() == "Linux" else "PlayerOneCamera.dll"
+        lib_path = vendor_dir / lib_name
+        if not lib_path.exists():
+            print(f"ERROR: Library file NOT FOUND at {lib_path}")
+            # Try to list files again
+            print(f"Folder contents: {[f.name for f in vendor_dir.iterdir()]}")
+            return
+
         import pyPOACamera as poa
         print("SDK: pyPOACamera imported successfully.")
     except Exception as e:
         print(f"SDK Error: Could not import pyPOACamera: {e}")
+        import traceback
+        traceback.print_exc()
         return
 
     # 2. Detect Camera (with retry loop)

@@ -20,8 +20,15 @@ else:
     _lib_name = "libPlayerOneCamera.so"
 
 _lib_path = str(_sdk_dir / _lib_name)
-# Use the absolute path to ensure the loader finds it in the vendor directory
-dll = cdll.LoadLibrary(_lib_path)
+# Use the absolute path to ensure the loader finds it in the vendor directory.
+# On Linux, we use RTLD_GLOBAL to ensure that any dependencies of the .so 
+# (like libusb) can be resolved from the same directory if needed.
+if _sys.platform == "linux" or _sys.platform == "linux2":
+    import ctypes as _ctypes
+    dll = _ctypes.CDLL(_lib_path, mode=_ctypes.RTLD_GLOBAL)
+else:
+    dll = cdll.LoadLibrary(_lib_path)
+
 del _os, _sys, _pathlib, _sdk_dir, _lib_name, _lib_path
 
 
