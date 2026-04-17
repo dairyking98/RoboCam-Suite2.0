@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QGridLayout, QLabel, QLineEdit, QGroupBox,
     QButtonGroup, QRadioButton, QSplitter,
     QFileDialog, QMessageBox, QSpinBox, QScrollArea,
-    QSizePolicy,
+    QSizePolicy, QCheckBox,
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor
@@ -524,27 +524,66 @@ class CalibrationPanel(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
 
         # Exposure
-        layout.addWidget(QLabel("Exposure (ms):"), 0, 0)
+        layout.addWidget(QLabel("Exposure:"), 0, 0)
+        exp_row = QHBoxLayout()
         self.exp_spin = QSpinBox()
         self.exp_spin.setRange(1, 2000) # 1ms to 2s
         self.exp_spin.setSingleStep(10)
         self.exp_spin.setSuffix(" ms")
         self.exp_spin.valueChanged.connect(self._on_camera_params_changed)
-        layout.addWidget(self.exp_spin, 0, 1)
+        exp_row.addWidget(self.exp_spin)
+        
+        self.auto_exp_check = QCheckBox("Auto")
+        self.auto_exp_check.setToolTip("Enable hardware auto-exposure.")
+        self.auto_exp_check.toggled.connect(self._on_camera_params_changed)
+        exp_row.addWidget(self.auto_exp_check)
+        layout.addLayout(exp_row, 0, 1)
 
         # Gain
         layout.addWidget(QLabel("Gain:"), 1, 0)
+        gain_row = QHBoxLayout()
         self.gain_spin = QSpinBox()
         self.gain_spin.setRange(0, 1000)
         self.gain_spin.setSingleStep(10)
         self.gain_spin.valueChanged.connect(self._on_camera_params_changed)
-        layout.addWidget(self.gain_spin, 1, 1)
+        gain_row.addWidget(self.gain_spin)
+        
+        self.auto_gain_check = QCheckBox("Auto")
+        self.auto_gain_check.setToolTip("Enable hardware auto-gain.")
+        self.auto_gain_check.toggled.connect(self._on_camera_params_changed)
+        gain_row.addWidget(self.auto_gain_check)
+        layout.addLayout(gain_row, 1, 1)
+
+        # Target Brightness
+        layout.addWidget(QLabel("Target Brightness:"), 2, 0)
+        self.brightness_spin = QSpinBox()
+        self.brightness_spin.setRange(0, 255)
+        self.brightness_spin.setValue(100)
+        self.brightness_spin.setToolTip("Target brightness level for Auto Exposure/Gain.")
+        self.brightness_spin.valueChanged.connect(self._on_camera_params_changed)
+        layout.addWidget(self.brightness_spin, 2, 1)
+
+        # USB Bandwidth
+        layout.addWidget(QLabel("USB Bandwidth:"), 3, 0)
+        self.bandwidth_spin = QSpinBox()
+        self.bandwidth_spin.setRange(35, 100)
+        self.bandwidth_spin.setValue(80)
+        self.bandwidth_spin.setSuffix("%")
+        self.bandwidth_spin.setToolTip("USB bandwidth limit (reduce if experiencing frame drops).")
+        self.bandwidth_spin.valueChanged.connect(self._on_camera_params_changed)
+        layout.addWidget(self.bandwidth_spin, 3, 1)
+
+        # Hardware Binning
+        self.binning_check = QCheckBox("Enable Hardware Binning (2x2)")
+        self.binning_check.setToolTip("Combine 2x2 pixels to increase sensitivity (halves resolution).")
+        self.binning_check.toggled.connect(self._on_camera_params_changed)
+        layout.addWidget(self.binning_check, 4, 0, 1, 2)
 
         # Refresh button
         refresh_btn = QPushButton("Refresh Controls")
         refresh_btn.setToolTip("Read current settings from the camera.")
         refresh_btn.clicked.connect(self._refresh_camera_controls)
-        layout.addWidget(refresh_btn, 2, 0, 1, 2)
+        layout.addWidget(refresh_btn, 5, 0, 1, 2)
 
         return grp
 
@@ -554,19 +593,68 @@ class CalibrationPanel(QWidget):
             # Block signals so we don't trigger set_exposure/gain while reading
             self.exp_spin.blockSignals(True)
             self.gain_spin.blockSignals(True)
+            self.auto_exp_check.blockSignals(True)
+            self.auto_gain_check.blockSignals(True)
+            self.brightness_spin.blockSignals(True)
+            self.bandwidth_spin.blockSignals(True)
+            self.binning_check.blockSignals(True)
             
-            # SDK uses microseconds, UI uses milliseconds
-            self.exp_spin.setValue(int(camera.get_exposure() / 1000))
-            self.gain_spin.setValue(int(camera.get_gain()))
+            try:
+                # Basic controls
+                # SDK uses microseconds, UI uses milliseconds
+                self.exp_spin.setValue(int(camera.get_exposure() / 1000))
+                self.gain_spin.setValue(int(camera.get_gain()))
+                
+                # Advanced controls
+                if hasattr(camera, 'get_auto_exposure'):
+                    self.auto_exp_check.setChecked(camera.get_auto_exposure())
+                    self.auto_gain_check.setChecked(camera.get_auto_gain())
+                    self.brightness_spin.setValue(camera.get_target_brightness())
+                    self.bandwidth_spin.setValue(camera.get_usb_bandwidth())
+                    self.binning_check.setChecked(camera.get_hardware_bin())
+            except Exception as e:
+                logger.warning(f"[Calibration] Refresh camera controls failed: {e}")
             
             self.exp_spin.blockSignals(False)
             self.gain_spin.blockSignals(False)
+            self.auto_exp_check.blockSignals(False)
+            self.auto_gain_check.blockSignals(False)
+            self.brightness_spin.blockSignals(False)
+            self.bandwidth_spin.blockSignals(False)
+            self.binning_check.blockSignals(False)
 
     def _on_camera_params_changed(self):
         camera = hw_manager.get_camera()
         if camera.is_connected:
-            camera.set_exposure(self.exp_spin.value() * 1000)
-            camera.set_gain(self.gain_spin.value())
+            try:
+                # Basic controls
+                camera.set_exposure(self.exp_spin.value() * 1000)
+                camera.set_gain(self.gain_spin.value())
+                
+                # Advanced controls
+                if hasattr(camera, 'set_auto_exposure'):
+                    camera.set_auto_exposure(self.auto_exp_check.isChecked())
+                    camera.set_auto_gain(self.auto_gain_check.isChecked())
+                    camera.set_target_brightness(self.brightness_spin.value())
+                    camera.set_usb_bandwidth(self.bandwidth_spin.value())
+                    camera.set_hardware_bin(self.binning_check.isChecked())
+                    
+                # Enable/disable spins based on auto state
+                self.exp_spin.setEnabled(not self.auto_exp_check.isChecked())
+                self.gain_spin.setEnabled(not self.auto_gain_check.isChecked())
+
+                # Persist to session
+                self._session.update_session("calibration", {
+                    "exposure_ms": self.exp_spin.value(),
+                    "gain": self.gain_spin.value(),
+                    "auto_exposure": self.auto_exp_check.isChecked(),
+                    "auto_gain": self.auto_gain_check.isChecked(),
+                    "target_brightness": self.brightness_spin.value(),
+                    "usb_bandwidth": self.bandwidth_spin.value(),
+                    "hardware_bin": self.binning_check.isChecked(),
+                })
+            except Exception as e:
+                logger.warning(f"[Calibration] Apply camera params failed: {e}")
 
     def _build_save_load_group(self) -> QGroupBox:
         grp = QGroupBox("Calibration File")
@@ -934,6 +1022,35 @@ class CalibrationPanel(QWidget):
                 break
         if not matched:
             self._custom_rb.setChecked(True)
+
+        # Load camera settings from session
+        self.exp_spin.blockSignals(True)
+        self.gain_spin.blockSignals(True)
+        self.auto_exp_check.blockSignals(True)
+        self.auto_gain_check.blockSignals(True)
+        self.brightness_spin.blockSignals(True)
+        self.bandwidth_spin.blockSignals(True)
+        self.binning_check.blockSignals(True)
+
+        self.exp_spin.setValue(int(s.get("exposure_ms", 20)))
+        self.gain_spin.setValue(int(s.get("gain", 100)))
+        self.auto_exp_check.setChecked(bool(s.get("auto_exposure", False)))
+        self.auto_gain_check.setChecked(bool(s.get("auto_gain", False)))
+        self.brightness_spin.setValue(int(s.get("target_brightness", 100)))
+        self.bandwidth_spin.setValue(int(s.get("usb_bandwidth", 80)))
+        self.binning_check.setChecked(bool(s.get("hardware_bin", False)))
+        
+        self.exp_spin.setEnabled(not self.auto_exp_check.isChecked())
+        self.gain_spin.setEnabled(not self.auto_gain_check.isChecked())
+
+        self.exp_spin.blockSignals(False)
+        self.gain_spin.blockSignals(False)
+        self.auto_exp_check.blockSignals(False)
+        self.auto_gain_check.blockSignals(False)
+        self.brightness_spin.blockSignals(False)
+        self.bandwidth_spin.blockSignals(False)
+        self.binning_check.blockSignals(False)
+
         # Attempt to auto-load the most recently saved calibration file;
         # only fall back to bare session values if no file is found.
         if not self._auto_load_latest_calibration():

@@ -473,6 +473,62 @@ class PlayerOneCamera(Camera):
         if self.is_connected:
             self._poa.SetGain(self._cam_id, int(gain), False)
 
+    # ------------------------------------------------------------------
+    # Advanced SDK Controls
+    # ------------------------------------------------------------------
+
+    def get_auto_exposure(self) -> bool:
+        if self._simulate or not self.is_connected:
+            return False
+        _, _, is_auto = self._poa.GetConfig(self._cam_id, self._poa.POAConfig.POA_EXPOSURE)
+        return bool(is_auto)
+
+    def set_auto_exposure(self, enabled: bool) -> None:
+        if self.is_connected:
+            current_us = self.get_exposure()
+            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_EXPOSURE, float(current_us), bool(enabled))
+
+    def get_auto_gain(self) -> bool:
+        if self._simulate or not self.is_connected:
+            return False
+        _, _, is_auto = self._poa.GetConfig(self._cam_id, self._poa.POAConfig.POA_GAIN)
+        return bool(is_auto)
+
+    def set_auto_gain(self, enabled: bool) -> None:
+        if self.is_connected:
+            current_gain = self.get_gain()
+            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_GAIN, float(current_gain), bool(enabled))
+
+    def get_target_brightness(self) -> int:
+        if self._simulate or not self.is_connected:
+            return 100
+        _, val, _ = self._poa.GetConfig(self._cam_id, self._poa.POAConfig.POA_AUTOEXPO_BRIGHTNESS)
+        return int(val)
+
+    def set_target_brightness(self, value: int) -> None:
+        if self.is_connected:
+            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_AUTOEXPO_BRIGHTNESS, float(value), False)
+
+    def get_usb_bandwidth(self) -> int:
+        if self._simulate or not self.is_connected:
+            return 80
+        _, val, _ = self._poa.GetConfig(self._cam_id, self._poa.POAConfig.POA_USB_BANDWIDTH_LIMIT)
+        return int(val)
+
+    def set_usb_bandwidth(self, value: int) -> None:
+        if self.is_connected:
+            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_USB_BANDWIDTH_LIMIT, float(value), False)
+
+    def get_hardware_bin(self) -> bool:
+        if self._simulate or not self.is_connected:
+            return False
+        _, val, _ = self._poa.GetConfig(self._cam_id, self._poa.POAConfig.POA_HARDWARE_BIN)
+        return bool(val)
+
+    def set_hardware_bin(self, enabled: bool) -> None:
+        if self.is_connected:
+            self._poa.SetConfig(self._cam_id, self._poa.POAConfig.POA_HARDWARE_BIN, float(enabled), False)
+
     @property
     def is_connected(self) -> bool:
         if self._simulate:
