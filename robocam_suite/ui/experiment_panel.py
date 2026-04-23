@@ -81,7 +81,7 @@ class _FrameGrabber(QThread):
         self._fps = fps
         self._running = False
         self._paused = False
-
+        self._is_experiment_active = False
 
     def stop(self):
         self._running = False
@@ -127,7 +127,6 @@ class _LivePreview(QWidget):
         self.setMinimumSize(320, 240)
         self._pixmap: Optional[QPixmap] = None
         self._is_experiment_active = False
-
         lbl = QLabel("No camera connected\n\nSelect a camera in Setup and click\nApply & Reconnect Camera", self)
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setStyleSheet("color: #a0a0a0; font-size: 12px;")
