@@ -66,6 +66,9 @@ class MainWindow(QMainWindow):
             self.experiment_panel.sync_from_calibration
         )
         
+        # Initial sync check in case calibration was auto-loaded during CalibrationPanel.__init__
+        QTimer.singleShot(500, self.experiment_panel.sync_from_calibration)
+        
         # Wire camera connection → calibration control refresh
         self.setup_panel.camera_connected.connect(
             self.calibration_panel._refresh_camera_controls
