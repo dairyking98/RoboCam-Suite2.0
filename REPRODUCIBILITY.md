@@ -139,3 +139,14 @@ To verify the camera settings persistence and the "Reset to Defaults" functional
 **Verification:**
 1.  **Start the RoboCam-Suite UI**: Confirm that the application launches without any `AttributeError` related to `experiment_runner`.
 2.  **Run an Experiment**: Start and stop an experiment to ensure that the recording overlay and tab locking/unlocking functionality work as expected, confirming that the signals are now correctly connected when the experiment runner is active.
+
+## 14. Fix for AttributeError: '_LivePreview' object has no attribute '_is_experiment_active'
+
+**Problem:** An `AttributeError` occurred during the `paintEvent` of `_LivePreview` because the `_is_experiment_active` attribute was not initialized in the `__init__` method. This caused the application to crash or display errors whenever the widget attempted to repaint.
+
+**Solution:**
+1.  **Initialized Attribute:** Added `self._is_experiment_active = False` to the `_LivePreview.__init__` method to ensure the attribute exists from the moment the widget is created.
+
+**Verification:**
+1.  **Start the RoboCam-Suite UI**: Confirm that the application launches and the "Experiment" tab's live preview renders without any `AttributeError` in the console or logs.
+2.  **Run an Experiment**: Verify that the "● RECORDING" overlay appears correctly when an experiment starts and disappears when it finishes.
