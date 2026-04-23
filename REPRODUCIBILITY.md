@@ -163,3 +163,16 @@ This was caused by the `_is_experiment_active` attribute not being initialized i
 **Verification:**
 1.  **Start the RoboCam-Suite UI**: Confirm that the application launches and the live camera preview is displayed correctly in the "Calibration" and "Experiment" tabs.
 2.  **Run an Experiment**: Verify that the "● RECORDING" overlay appears and disappears as expected during an experiment, confirming that `_is_experiment_active` is being correctly updated.
+
+## 16. Fix for Live Preview Not Working (Laser Indicator Interference)
+
+**Problem:** The live preview was not working, likely due to the laser ON indicator being drawn directly onto the frames before they were sent to the live preview. This could interfere with the `QImage` conversion or `paintEvent` in the `_LivePreview` widget.
+
+**Solution:**
+1.  **Relocated Laser Indicator Drawing:** The logic for drawing the laser ON indicator (`cv2.putText`) was moved within the `_WellRecorder._run` method. It now operates on a *copy* of the frame (`frame_to_write`) specifically for video recording, ensuring that the original `frame` emitted to the live preview (`_emit_proxy(frame)`) remains unmodified.
+
+**Verification:**
+1.  **Start the RoboCam-Suite UI**: Confirm that the application launches and the live camera preview is displayed correctly in the "Calibration" and "Experiment" tabs.
+2.  **Run a Video Experiment with Laser Activation**: Start a video capture experiment where the laser is programmed to turn ON.
+3.  **Verify Live Preview**: Observe the live preview during the experiment. The asterisk (`*`) laser ON indicator should *not* be visible in the live preview.
+4.  **Verify Recorded Video**: After the experiment, open the recorded AVI file. Confirm that the asterisk (`*`) laser ON indicator *is* visible in the top-left corner of the video frames when the laser was active.
