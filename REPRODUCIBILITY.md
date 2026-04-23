@@ -176,3 +176,19 @@ This was caused by the `_is_experiment_active` attribute not being initialized i
 2.  **Run a Video Experiment with Laser Activation**: Start a video capture experiment where the laser is programmed to turn ON.
 3.  **Verify Live Preview**: Observe the live preview during the experiment. The asterisk (`*`) laser ON indicator should *not* be visible in the live preview.
 4.  **Verify Recorded Video**: After the experiment, open the recorded AVI file. Confirm that the asterisk (`*`) laser ON indicator *is* visible in the top-left corner of the video frames when the laser was active.
+
+## 17. Default Camera Settings, Laser Indicator, and FPS Adjustment Re-implementation
+
+**Problem:** The live preview was not working due to an extremely low exposure setting (1ms). Additionally, the laser ON indicator was interfering with the live preview, and the FPS adjustment needed to be re-implemented carefully.
+
+**Solution:**
+1.  **Default Camera Settings:** Updated `robocam_suite/config/default_config.json` to set default exposure to 20ms (20000 microseconds), gain to 100, and target brightness to 100. USB bandwidth is not directly configurable via the OpenCV driver.
+2.  **Laser ON Indicator Re-implementation:** The laser ON indicator logic in `_WellRecorder._run` (in `robocam_suite/experiments/experiment.py`) was modified to apply the asterisk (`*`) only to a *copy* of the frame (`frame_to_write`) that is written to the AVI file. The original frame is emitted to the live preview, ensuring no interference.
+3.  **FPS Adjustment Re-implementation:** The `_actual_fps` calculation and its inclusion in the metadata (`_save_metadata` in `robocam_suite/experiments/experiment.py`) were re-implemented to accurately reflect the actual frames per second captured during recording.
+
+**Verification:**
+1.  **Start the RoboCam-Suite UI**: Confirm that the application launches and the live camera preview is displayed correctly in the "Calibration" and "Experiment" tabs with the new default settings.
+2.  **Default Camera Settings**: Navigate to the camera settings in the UI and confirm that the default exposure is 20ms, gain is 100, and target brightness is 100.
+3.  **Laser ON Indicator (Live Preview)**: Start a video capture experiment where the laser is programmed to turn ON. Observe the live preview during the experiment; the asterisk (`*`) laser ON indicator should *not* be visible.
+4.  **Laser ON Indicator (Recorded Video)**: After the experiment, open the recorded AVI file. Confirm that the asterisk (`*`) laser ON indicator *is* visible in the top-left corner of the video frames when the laser was active.
+5.  **FPS Adjustment**: After an experiment, locate the generated metadata file (`_metadata.json`) for the recorded video. Open it and verify that the `fps_actual` field is present and contains a reasonable value reflecting the actual capture rate. Play back the recorded AVI file and confirm that its duration matches the `duration_seconds` in the metadata.
