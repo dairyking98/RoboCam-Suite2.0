@@ -126,6 +126,7 @@ class _LivePreview(QWidget):
         super().__init__(parent)
         self.setMinimumSize(320, 240)
         self._pixmap: Optional[QPixmap] = None
+        self._is_experiment_active = False
         lbl = QLabel("No camera connected\n\nSelect a camera in Setup and click\nApply & Reconnect Camera", self)
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setStyleSheet("color: #a0a0a0; font-size: 12px;")
