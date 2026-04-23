@@ -60,7 +60,6 @@ class _WellRecorder:
         self._frames_captured = 0
         self._start_time = None
         self._end_time = None
-        self._actual_fps = 0.0
         self._laser_events = [] # list of (timestamp, state)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -132,12 +131,7 @@ class _WellRecorder:
         finally:
             self._end_time = time.time()
             writer.release()
-            
-            duration = (self._end_time - self._start_time) if self._start_time and self._end_time else 0
-            self._actual_fps = round(self._frames_captured / duration, 2) if duration > 0 else 0
-
             self._save_metadata()
-            self._correct_video_fps()
             logger.info(f"[WellRecorder] Saved {self._output_path} ({self._frames_captured} frames)")
 
     def _emit_proxy(self, frame):
@@ -168,7 +162,7 @@ class _WellRecorder:
             "frames_captured": self._frames_captured,
             "duration_seconds": round(duration, 3),
             "fps_target": self._fps,
-            "fps_actual": self._actual_fps,
+            "fps_actual": round(self._frames_captured / duration, 2) if duration > 0 else 0,
             "timestamp": datetime.now().isoformat(),
             "resolution": list(self._camera.get_resolution()),
             "laser_events": self._laser_events
@@ -184,34 +178,6 @@ class _WellRecorder:
     def stop(self):
         self._stop_event.set()
         self._thread.join(timeout=5.0)
-
-    def _correct_video_fps(self):
-        """Rewrites the video file with the actual FPS using ffmpeg."""
-        if self._actual_fps == 0:
-            logger.warning("[WellRecorder] Actual FPS is 0, skipping video correction.")
-            return
-
-        temp_output_path = self._output_path + ".temp.avi"
-        command = [
-            "ffmpeg",
-            "-i", self._output_path,
-            "-r", str(self._actual_fps),
-            "-an", # No audio
-            "-c:v", "copy",
-            temp_output_path
-        ]
-        
-        try:
-            import subprocess
-            logger.info(f"[WellRecorder] Correcting video FPS with command: {" ".join(command)}")
-            subprocess.run(command, check=True, capture_output=True)
-            import os
-            os.replace(temp_output_path, self._output_path)
-            logger.info(f"[WellRecorder] Video FPS corrected to {self._actual_fps} for {self._output_path}")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"[WellRecorder] FFmpeg failed: {e.stderr.decode()}")
-        except Exception as e:
-            logger.error(f"[WellRecorder] Error correcting video FPS: {e}")
 
 
 # ---------------------------------------------------------------------------
