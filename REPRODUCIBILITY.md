@@ -192,3 +192,19 @@ This was caused by the `_is_experiment_active` attribute not being initialized i
 3.  **Laser ON Indicator (Live Preview)**: Start a video capture experiment where the laser is programmed to turn ON. Observe the live preview during the experiment; the asterisk (`*`) laser ON indicator should *not* be visible.
 4.  **Laser ON Indicator (Recorded Video)**: After the experiment, open the recorded AVI file. Confirm that the asterisk (`*`) laser ON indicator *is* visible in the top-left corner of the video frames when the laser was active.
 5.  **FPS Adjustment**: After an experiment, locate the generated metadata file (`_metadata.json`) for the recorded video. Open it and verify that the `fps_actual` field is present and contains a reasonable value reflecting the actual capture rate. Play back the recorded AVI file and confirm that its duration matches the `duration_seconds` in the metadata.
+
+## 18. Fix for AttributeError: 
+'_WellRecorder' object has no attribute '_hw_manager' and 'str' object has no attribute 'name'
+
+**Problem:**
+1.  An `AttributeError: '_WellRecorder' object has no attribute '_hw_manager'` occurred because the `hw_manager` was not being passed to the `_WellRecorder` constructor.
+2.  An `AttributeError: 'str' object has no attribute 'name'` occurred in `_save_metadata` because `self._output_path` was a string, not a `Path` object, which has a `.name` attribute.
+
+**Solution:**
+1.  **Pass `hw_manager` to `_WellRecorder`**: Modified the `_WellRecorder` constructor to accept `hw_manager` and stored it as `self._hw_manager`.
+2.  **Convert `output_path` to `Path` object**: In `_WellRecorder.__init__`, `self._output_path` is now explicitly converted to a `pathlib.Path` object.
+
+**Verification:**
+1.  **Run an Experiment**: Start a video capture experiment.
+2.  **Verify Recording**: Ensure the experiment runs without crashing and that video files are successfully recorded.
+3.  **Check Metadata**: Open the generated metadata JSON file and confirm that `video_file` and other fields are correctly populated.
