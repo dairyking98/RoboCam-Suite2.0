@@ -81,6 +81,7 @@ class _FrameGrabber(QThread):
         self._fps = fps
         self._running = False
         self._paused = False
+        self._is_experiment_active = False
 
     def stop(self):
         self._running = False
@@ -138,6 +139,10 @@ class _LivePreview(QWidget):
         self._no_cam_lbl.hide()
         self.update()
 
+    def set_experiment_active(self, active: bool):
+        self._is_experiment_active = active
+        self.update()
+
     def show_disconnected(self):
         """Re-show the 'no camera' label and clear the last frame."""
         self._pixmap = None
@@ -158,6 +163,18 @@ class _LivePreview(QWidget):
             painter.drawPixmap(x_off, y_off, scaled)
         else:
             painter.fillRect(0, 0, w, h, QColor(30, 30, 30))
+
+        if self._is_experiment_active:
+            # Semi-transparent black overlay
+            painter.fillRect(0, 0, w, h, QColor(0, 0, 0, 160))
+            
+            # Red "RECORDING" text
+            painter.setPen(QColor(255, 50, 50))
+            font = painter.font()
+            font.setBold(True)
+            font.setPointSize(24)
+            painter.setFont(font)
+            painter.drawText(0, 0, w, h, Qt.AlignmentFlag.AlignCenter, "● RECORDING")
         painter.end()
 
 
@@ -169,6 +186,8 @@ class _ExperimentRunner(QThread):
     progress = Signal(str)
     finished = Signal()
     proxy_frame = Signal(QImage)
+    experiment_started = Signal()
+    experiment_finished = Signal()
 
     def __init__(self, experiment: Experiment):
         super().__init__()
@@ -179,8 +198,10 @@ class _ExperimentRunner(QThread):
         self.experiment._on_proxy_frame = lambda img: self.proxy_frame.emit(img)
 
     def run(self):
+        self.experiment_started.emit()
         self.experiment.run()
         self.finished.emit()
+        self.experiment_finished.emit()
 
     def stop(self):
         self.experiment.stop()
@@ -290,6 +311,8 @@ class _WellSelectionGroup(QGroupBox):
 # ---------------------------------------------------------------------------
 
 class ExperimentPanel(QWidget):
+    experiment_started = Signal()
+    experiment_finished = Signal()
     """Three-column experiment panel: live preview | settings | well selection."""
 
     MODE_VIDEO = "Video Capture"
@@ -362,6 +385,10 @@ class ExperimentPanel(QWidget):
         self._grabber.camera_disconnected.connect(self._live_preview.show_disconnected)
         self._grabber.camera_disconnected.connect(self._update_resolution_label)
         self._grabber.start()
+
+        # Wire experiment runner signals to live preview
+        self.experiment_runner.experiment_started.connect(lambda: self._live_preview.set_experiment_active(True))
+        self.experiment_runner.experiment_finished.connect(lambda: self._live_preview.set_experiment_active(False))
         
         # Initial resolution
         self._update_resolution_label()
@@ -714,6 +741,8 @@ class ExperimentPanel(QWidget):
             lambda msg: self.status_label.setText(f"Status: {msg}")
         )
         self.experiment_runner.proxy_frame.connect(self._live_preview.update_frame)
+        self.experiment_runner.experiment_started.connect(lambda: self._live_preview.set_experiment_active(True))
+        self.experiment_runner.experiment_finished.connect(lambda: self._live_preview.set_experiment_active(False))
         
         # Pause preview to prevent SDK contention
         self._grabber.set_paused(True)

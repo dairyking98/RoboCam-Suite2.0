@@ -55,6 +55,10 @@ class MainWindow(QMainWindow):
         self.manual_control_panel = ManualControlPanel()
         self.tabs.addTab(self.manual_control_panel, "Manual Control")
 
+        # Wire experiment start/stop to tab locking
+        self.experiment_panel.experiment_started.connect(lambda: self._set_tabs_enabled(False))
+        self.experiment_panel.experiment_finished.connect(lambda: self._set_tabs_enabled(True))
+
         # Wire calibration → experiment auto-sync
         # Re-sync whenever the user changes rows, columns, or corner positions
         self.calibration_panel.cols_spin.valueChanged.connect(
@@ -106,3 +110,12 @@ class MainWindow(QMainWindow):
         session_manager.save_session()
         hw_manager.disconnect_all()
         event.accept()
+
+    def _set_tabs_enabled(self, enabled: bool):
+        # Disable all tabs except the Experiment tab when an experiment is running
+        for i in range(self.tabs.count()):
+            if self.tabs.widget(i) != self.experiment_panel:
+                self.tabs.setTabEnabled(i, enabled)
+        
+        # Always enable the Experiment tab
+        self.tabs.setTabEnabled(self.tabs.indexOf(self.experiment_panel), True)
