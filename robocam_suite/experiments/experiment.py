@@ -302,6 +302,14 @@ class Experiment:
     # Per-well handlers
     # ------------------------------------------------------------------
 
+    def _sleep_check_stop(self, seconds: float):
+        """Sleep for N seconds but check for stop requests every 100ms."""
+        start = time.time()
+        while time.time() - start < seconds:
+            if self._stop_requested:
+                raise InterruptedError("Stop requested")
+            time.sleep(0.1)
+
     def _run_video_well(self, label: str, camera, gpio, laser_pin: int,
                          well_num: int = 0, total: int = 0):
         """
@@ -323,7 +331,7 @@ class Experiment:
         try:
             # 1. Dwell — settle after move, laser off
             self._on_status(f"{prefix}Arrived at {well_id} — settling ({dwell:.1f}s)")
-            time.sleep(dwell)
+            self._sleep_check_stop(dwell)
 
             # 2. Start recording
             if camera.is_connected:
@@ -335,7 +343,7 @@ class Experiment:
                 self._on_status(f"{prefix}Recording {well_id} — no camera")
 
             # 3. Pre-laser record (laser OFF)
-            time.sleep(off_pre)
+            self._sleep_check_stop(off_pre)
 
             # 4. Laser ON
             if gpio_enabled:
@@ -343,7 +351,7 @@ class Experiment:
                 if recorder:
                     recorder.log_laser_event(True)
                 self._on_status(f"{prefix}Recording {well_id} (laser ON — {on_dur:.1f}s)")
-            time.sleep(on_dur)
+            self._sleep_check_stop(on_dur)
 
             # 5. Laser OFF, post-laser record
             if gpio_enabled:
@@ -351,8 +359,11 @@ class Experiment:
                 if recorder:
                     recorder.log_laser_event(False)
                 self._on_status(f"{prefix}Recording {well_id} (laser off — {off_post:.1f}s)")
-            time.sleep(off_post)
+            self._sleep_check_stop(off_post)
 
+        except InterruptedError:
+            logger.info(f"[Experiment] Recording interrupted at {well_id}")
+            raise
         finally:
             try:
                 gpio.write_pin(laser_pin, False)
@@ -375,7 +386,10 @@ class Experiment:
         prefix = f"[{well_num}/{total}] " if total else ""
 
         self._on_status(f"{prefix}Arrived at {well_id} — settling ({dwell:.1f}s)")
-        time.sleep(dwell)
+        try:
+            self._sleep_check_stop(dwell)
+        except InterruptedError:
+            raise
 
         if not camera.is_connected:
             logger.warning(f"[Experiment] Camera not connected — skipping image for {label}.")
