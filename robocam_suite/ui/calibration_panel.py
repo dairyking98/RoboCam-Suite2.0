@@ -415,6 +415,14 @@ class CalibrationPanel(QWidget):
         self.step_size_input.setFixedWidth(55)
         self.step_size_input.setToolTip("Enter any custom step size in mm.")
         step_layout.addWidget(self.step_size_input)
+        
+        # Active step display
+        step_layout.addStretch()
+        step_layout.addWidget(QLabel("Active:"))
+        self._active_step_label = QLabel("1.0 mm")
+        self._active_step_label.setStyleSheet("font-weight: bold; color: #4CAF50; background: #2a2a2a; padding: 2px 5px; border-radius: 3px;")
+        step_layout.addWidget(self._active_step_label)
+
         # Clicking a preset radio → fill the text box with that value
         self._step_btn_group.buttonClicked.connect(self._on_step_btn_clicked)
         self.step_size_input.textEdited.connect(self._on_custom_step_edited)
@@ -993,20 +1001,26 @@ class CalibrationPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _on_step_btn_clicked(self, btn):
-        """Preset radio clicked — update the text box or restore custom value."""
+        """Preset radio clicked — update the active display but keep custom input visible."""
         if btn is not self._custom_rb:
-            self.step_size_input.setText(btn.text())
+            # Preset selected - update the active label but DONT change the input box
+            # so the user can still see their custom value
+            self._active_step_label.setText(f"{btn.text()} mm")
             self._session.update_session("calibration", {"step_size": btn.text()})
         else:
-            # Re-selected "Custom" — restore the last-typed custom value
-            self.step_size_input.setText(self._last_custom_step)
-            self._session.update_session("calibration", {"step_size": self._last_custom_step})
+            # Re-selected "Custom" — restore the last-typed custom value to active label
+            self._active_step_label.setText(f"{self.step_size_input.text()} mm")
+            self._session.update_session("calibration", {"step_size": self.step_size_input.text()})
 
     def _on_custom_step_edited(self, text: str):
         """User typed in the custom field — auto-select the Custom radio button."""
         self._last_custom_step = text
         self._custom_rb.setChecked(True)
-        self._session.update_session("calibration", {"step_size": text})
+        self._active_step_label.setText(f"{text} mm")
+        self._session.update_session("calibration", {
+            "step_size": text,
+            "custom_step_size": text
+        })
 
     def _update_position_display(self):
         try:
@@ -1035,7 +1049,6 @@ class CalibrationPanel(QWidget):
     def _load_from_session(self):
         s = self._session.get_session("calibration")
         step = s.get("step_size", "1.0")
-        self.step_size_input.setText(step)
         
         matched = False
         for btn in self._step_btn_group.buttons():
@@ -1046,10 +1059,17 @@ class CalibrationPanel(QWidget):
         
         if not matched:
             self._custom_rb.setChecked(True)
+            self.step_size_input.setText(step)
             self._last_custom_step = step
         else:
-            # If session loaded a preset, default custom to 1.0 or another sensible default
-            self._last_custom_step = "1.0"
+            # If session loaded a preset, we still want to load the last custom step
+            # into the input box so it's visible.
+            custom_step = s.get("custom_step_size", "1.0")
+            self.step_size_input.setText(custom_step)
+            self._last_custom_step = custom_step
+            
+        # Update the active display
+        self._active_step_label.setText(f"{step} mm")
 
         # Load camera settings from session
         self.exp_spin.blockSignals(True)
