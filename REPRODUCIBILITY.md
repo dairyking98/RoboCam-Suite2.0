@@ -208,3 +208,19 @@ This was caused by the `_is_experiment_active` attribute not being initialized i
 1.  **Run an Experiment**: Start a video capture experiment.
 2.  **Verify Recording**: Ensure the experiment runs without crashing and that video files are successfully recorded.
 3.  **Check Metadata**: Open the generated metadata JSON file and confirm that `video_file` and other fields are correctly populated.
+
+## 19. Camera Settings Persistence and Recall Fix
+
+**Problem:** Camera control values (exposure, gain, auto-exposure, etc.) were not being saved upon program closure and were not recalled when the program was reopened.
+
+**Solution:**
+1.  **Dedicated Session Key:** Modified `_on_camera_params_changed` in `robocam_suite/ui/calibration_panel.py` to save all camera-related settings to a new, dedicated session key named `"camera_settings"` instead of mixing them with general `"calibration"` settings.
+2.  **Load from Session:** Updated `_load_from_session` in `robocam_suite/ui/calibration_panel.py` to retrieve camera settings from the `"camera_settings"` session key and apply them to the respective UI elements (spin boxes and checkboxes) upon application startup.
+
+**Verification:**
+1.  **Launch Application:** Start RoboCam-Suite 2.0.
+2.  **Adjust Camera Settings:** In the "Calibration" tab, modify the exposure, gain, and other camera settings to non-default values.
+3.  **Close Application:** Close RoboCam-Suite 2.0.
+4.  **Re-launch Application:** Open RoboCam-Suite 2.0 again.
+5.  **Verify Settings:** Navigate to the "Calibration" tab and confirm that the camera settings previously set are now displayed in the UI and applied to the camera.
+6.  **Reset to Defaults:** Click the "Reset to Defaults" button and confirm that settings revert to their default values (20ms exposure, 100 gain, 100 target brightness, etc.).
