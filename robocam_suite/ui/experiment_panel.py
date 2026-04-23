@@ -168,12 +168,15 @@ class _LivePreview(QWidget):
 class _ExperimentRunner(QThread):
     progress = Signal(str)
     finished = Signal()
+    proxy_frame = Signal(QImage)
 
     def __init__(self, experiment: Experiment):
         super().__init__()
         self.experiment = experiment
         # Wire the experiment's on_status callback to emit progress signal
         self.experiment._on_status = lambda msg: self.progress.emit(msg)
+        # Wire the proxy frame callback
+        self.experiment._on_proxy_frame = lambda img: self.proxy_frame.emit(img)
 
     def run(self):
         self.experiment.run()
