@@ -258,6 +258,7 @@ class CalibrationPanel(QWidget):
         super().__init__(parent)
         self.hw_manager = hw_manager
         self._session = session_manager
+        self._is_homed = False # Track homing status
 
         # Top-level horizontal splitter — three panes
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
@@ -455,6 +456,8 @@ class CalibrationPanel(QWidget):
         self.z_plus_btn.clicked.connect(lambda: self._move("z", 1))
         self.z_minus_btn.clicked.connect(lambda: self._move("z", -1))
         self.home_btn.clicked.connect(self._home)
+
+        self._set_movement_controls_enabled(False) # Disable until homed
 
         return grp
 
@@ -756,6 +759,8 @@ class CalibrationPanel(QWidget):
             # Sync cache with live position so display is accurate after jog
             mc.query_current_position()
             self._update_position_display()
+            self._is_homed = True
+            self._set_movement_controls_enabled(True)
         except Exception as e:
             logger.warning(f"[Calibration] Move error: {e}")
 
@@ -1033,12 +1038,26 @@ class CalibrationPanel(QWidget):
             self.x_pos_label.setText(f"{pos[0]:.2f}")
             self.y_pos_label.setText(f"{pos[1]:.2f}")
             self.z_pos_label.setText(f"{pos[2]:.2f}")
+
+            # Check if homed (not 0,0,0) and enable controls if not already
+            if not self._is_homed and (pos[0] != 0.0 or pos[1] != 0.0 or pos[2] != 0.0):
+                self._is_homed = True
+                self._set_movement_controls_enabled(True)
+
+        except Exception as e:
+            logger.error(f"[CalibrationPanel] Error updating position display: {e}")
+            self.x_pos_label.setText("ERR")
+            self.y_pos_label.setText("ERR")
+            self.z_pos_label.setText("ERR")
             
             # Show a small homing warning in the status label if at 0,0,0 on startup
-            if mc.is_connected and pos == (0.0, 0.0, 0.0):
-                if not self._cal_status_label.text():
-                    self._cal_status_label.setText("Stage at 0,0,0 \u2014 home required to ensure absolute position.")
+            if mc.is_connected and pos == (0.0, 0.0, 0.0) and not self._is_homed:
+                if not self._cal_status_label.text(): # Only set if no other message is present
                     self._cal_status_label.setStyleSheet("font-size: 10px; color: orange;")
+                    self._cal_status_label.setText("Printer not homed. Please click 'Home' before moving.")
+            elif self._is_homed and self._cal_status_label.text() == "Printer not homed. Please click 'Home' before moving.":
+                self._cal_status_label.setStyleSheet("font-size: 10px; color: green;")
+                self._cal_status_label.setText("")
         except Exception:
             pass
 
@@ -1077,6 +1096,29 @@ class CalibrationPanel(QWidget):
         # Load camera settings from session
         self.exp_spin.blockSignals(True)
         self.gain_spin.blockSignals(True)
+
+        # Initial check for homing status
+        self._update_position_display()
+
+    def _set_movement_controls_enabled(self, enabled: bool):
+        self.y_plus_btn.setEnabled(enabled)
+        self.x_minus_btn.setEnabled(enabled)
+        self.x_plus_btn.setEnabled(enabled)
+        self.y_minus_btn.setEnabled(enabled)
+        self.z_plus_btn.setEnabled(enabled)
+        self.z_minus_btn.setEnabled(enabled)
+        self.step_size_input.setEnabled(enabled)
+        self.goto_x.setEnabled(enabled)
+        self.goto_y.setEnabled(enabled)
+        self.goto_z.setEnabled(enabled)
+        self.goto_btn.setEnabled(enabled)
+
+        # Enable/disable all radio buttons in the step size group
+        for btn in self._step_btn_group.buttons():
+            btn.setEnabled(enabled)
+
+        # The home button should always be enabled
+        self.home_btn.setEnabled(True)
         self.auto_exp_check.blockSignals(True)
         self.auto_gain_check.blockSignals(True)
         self.brightness_spin.blockSignals(True)
