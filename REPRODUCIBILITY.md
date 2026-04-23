@@ -71,3 +71,14 @@ To verify the homing enforcement logic:
 4.  **Perform Homing**: Click the "Home" button. Observe that the printer performs its homing sequence.
 5.  **Verify Controls Enabled**: After successful homing, all movement controls should become enabled, and the warning message should disappear.
 6.  **Test Movement**: Attempt to jog the stage using the X, Y, or Z buttons to confirm movement is now possible.
+
+## 8. Recording Overlay and Tab Locking Verification
+
+To verify the recording overlay and tab locking functionality:
+
+1.  **Start the RoboCam-Suite UI**: Navigate to the "Experiment" tab.
+2.  **Start an Experiment**: Initiate an experiment using the controls in the "Experiment" tab.
+3.  **Observe Live Preview**: Confirm that a semi-transparent black overlay with "● RECORDING" text appears over the live camera preview in the "Experiment" tab.
+4.  **Verify Tab Locking**: Attempt to switch to the "Setup", "Calibration", and "Manual Control" tabs. Confirm that these tabs are disabled and cannot be selected while the experiment is running.
+5.  **Stop Experiment**: Stop the ongoing experiment.
+6.  **Verify Controls Restored**: Confirm that the "RECORDING" overlay disappears from the live preview and the "Setup", "Calibration", and "Manual Control" tabs become enabled again.
