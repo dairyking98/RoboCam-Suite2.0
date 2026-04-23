@@ -60,3 +60,14 @@ Recent updates have focused on improving the user interface and experiment contr
 
 - **Decoupled Step Size UI**: The step size input field now retains custom values even when a preset is selected, allowing users to see their custom setting while using a preset. The redundant 'Active' step label has been removed for a cleaner interface.
 - **Immediate Experiment Stop**: Experiments can now be stopped immediately (non-gracefully) by setting a stop flag, ensuring a quick halt to ongoing processes. This is crucial for safety and rapid iteration during experiments.
+
+## 7. Homing Enforcement Verification
+
+To verify the homing enforcement logic:
+
+1.  **Start the RoboCam-Suite UI**: Ensure the application starts with the `CalibrationPanel` visible.
+2.  **Observe Initial State**: Confirm that all movement controls (jog buttons, step size input, Go To Position fields) are disabled. The "Home" button should be the only active movement control.
+3.  **Check Status Message**: Verify that a warning message, such as "Printer not homed. Please click 'Home' before moving.", is displayed in the status label.
+4.  **Perform Homing**: Click the "Home" button. Observe that the printer performs its homing sequence.
+5.  **Verify Controls Enabled**: After successful homing, all movement controls should become enabled, and the warning message should disappear.
+6.  **Test Movement**: Attempt to jog the stage using the X, Y, or Z buttons to confirm movement is now possible.
