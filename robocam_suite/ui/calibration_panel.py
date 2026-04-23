@@ -595,6 +595,11 @@ class CalibrationPanel(QWidget):
         refresh_btn.clicked.connect(self._refresh_camera_controls)
         layout.addWidget(refresh_btn, 5, 0, 1, 2)
 
+        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn.setToolTip("Reset all camera controls to their default values.")
+        reset_btn.clicked.connect(self._reset_camera_controls_to_defaults)
+        layout.addWidget(reset_btn, 6, 0, 1, 2)
+
         return grp
 
     def _refresh_camera_controls(self):
@@ -1137,6 +1142,20 @@ class CalibrationPanel(QWidget):
         if enabled:
             self.exp_spin.setEnabled(not self.auto_exp_check.isChecked())
             self.gain_spin.setEnabled(not self.auto_gain_check.isChecked())
+
+    def _reset_camera_controls_to_defaults(self):
+        """Resets all camera control UI elements to their default values and applies them."""
+        self.exp_spin.setValue(20) # Default 20ms
+        self.gain_spin.setValue(100) # Default 100
+        self.auto_exp_check.setChecked(False)
+        self.auto_gain_check.setChecked(False)
+        self.brightness_spin.setValue(100) # Default 100
+        self.bandwidth_spin.setValue(80) # Default 80%
+        self.binning_check.setChecked(False)
+        
+        # Force update the camera with default values
+        self._on_camera_params_changed()
+        logger.info("[Calibration] Camera controls reset to defaults.")
 
 
         # Attempt to auto-load the most recently saved calibration file;
