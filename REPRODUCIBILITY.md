@@ -53,3 +53,10 @@ This script will:
 If `test_playerone_capture.py` fails with:
 - **"No such file or directory" (OSError)**: Usually means an architecture mismatch (e.g., trying to run x86 code on ARM) or a missing dependency like `libusb`.
 - **"Found 0 Player One camera(s)"**: Usually means the `udev` rules were not applied or the camera is not securely connected.
+
+## 6. UI Refinements and Experiment Control
+
+Recent updates have focused on improving the user interface and experiment control:
+
+- **Decoupled Step Size UI**: The step size input field now retains custom values even when a preset is selected, allowing users to see their custom setting while using a preset. The redundant 'Active' step label has been removed for a cleaner interface.
+- **Immediate Experiment Stop**: Experiments can now be stopped immediately (non-gracefully) by setting a stop flag, ensuring a quick halt to ongoing processes. This is crucial for safety and rapid iteration during experiments.
