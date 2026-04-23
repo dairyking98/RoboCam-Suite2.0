@@ -116,8 +116,8 @@ class _FrameGrabber(QThread):
                     if _was_connected:
                         self.camera_disconnected.emit()
                         _was_connected = False
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"[_FrameGrabber] Error during frame capture: {e}")
             self.msleep(interval_ms)
 
 
