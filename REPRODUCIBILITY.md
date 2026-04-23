@@ -103,3 +103,18 @@ To verify the visual laser ON indicator on recorded video frames:
 3.  **Locate Output Video**: After the experiment, find the recorded AVI file in the output directory.
 4.  **Play Video**: Open the AVI file with a video player.
 5.  **Observe Laser Indicator**: During the segments of the video where the laser was active, confirm that a white asterisk (`*`) is displayed in the top-left corner of the video frame. The asterisk should disappear when the laser is off.
+
+## 11. Fix for AttributeError: 'CalibrationPanel' object has no attribute 'auto_exp_check'
+
+**Problem:** An `AttributeError` occurred because `_set_movement_controls_enabled` was attempting to access camera control widgets (e.g., `self.auto_exp_check`) before they were initialized in `_build_camera_control_group`.
+
+**Solution:**
+1.  **Refactored Control Enabling:** Separated the enabling/disabling logic for movement controls and camera controls into two distinct methods: `_set_movement_controls_enabled` and `_set_camera_controls_enabled`.
+2.  **Reordered Initialization:** Ensured that all UI building methods (`_build_movement_group`, `_build_camera_control_group`, etc.) are called within `CalibrationPanel.__init__` before any calls to `_set_movement_controls_enabled` or `_set_camera_controls_enabled`.
+3.  **Conditional Enabling:** Camera controls are now explicitly disabled at startup and only enabled after the printer has been successfully homed, aligning with the 
+homing enforcement.
+
+**Verification:**
+1.  **Start the RoboCam-Suite UI**: Confirm that the application launches without any `AttributeError` related to `auto_exp_check` or other camera control widgets.
+2.  **Observe Initial State**: Verify that both movement controls and camera controls are initially disabled, and the "Home" button is the only active movement control.
+3.  **Perform Homing**: Click the "Home" button. After successful homing, confirm that both movement controls and camera controls become enabled.
