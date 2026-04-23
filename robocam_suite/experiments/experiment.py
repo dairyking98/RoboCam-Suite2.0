@@ -60,6 +60,7 @@ class _WellRecorder:
         self._frames_captured = 0
         self._start_time = None
         self._end_time = None
+        self._actual_fps = 0.0
         self._laser_events = [] # list of (timestamp, state)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -113,11 +114,19 @@ class _WellRecorder:
             while not self._stop_event.is_set():
                 frame = self._camera.read_frame()
                 if frame is not None:
-                    writer.write(frame)
-                    self._frames_captured += 1
-                    
+                    # Emit proxy frame (for live preview) before any modifications
                     if self._frames_captured % proxy_interval == 0:
                         self._emit_proxy(frame)
+
+                    # Create a copy for video recording to apply indicator
+                    frame_to_write = frame.copy()
+
+                    # Draw laser ON indicator if active
+                    if self._hw_manager.get_gpio_controller().get_laser_state():
+                        cv2.putText(frame_to_write, "*", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
+
+                    writer.write(frame_to_write)
+                    self._frames_captured += 1
                 
                 # Dynamic sleep to maintain target FPS
                 elapsed = time.time() - self._start_time
@@ -131,8 +140,10 @@ class _WellRecorder:
         finally:
             self._end_time = time.time()
             writer.release()
+            duration = self._end_time - self._start_time
+            self._actual_fps = self._frames_captured / duration if duration > 0 else 0.0
             self._save_metadata()
-            logger.info(f"[WellRecorder] Saved {self._output_path} ({self._frames_captured} frames)")
+            logger.info(f"[WellRecorder] Saved {self._output_path} ({self._frames_captured} frames, actual FPS: {self._actual_fps:.2f})")
 
     def _emit_proxy(self, frame):
         """Convert BGR frame to QImage and call the proxy callback."""
@@ -158,11 +169,11 @@ class _WellRecorder:
         
         import json
         metadata = {
-            "video_file": os.path.basename(self._output_path),
+            "video_file": str(self._output_path.name),
             "frames_captured": self._frames_captured,
-            "duration_seconds": round(duration, 3),
+            "duration_seconds": round(self._end_time - self._start_time, 3),
             "fps_target": self._fps,
-            "fps_actual": round(self._frames_captured / duration, 2) if duration > 0 else 0,
+            "fps_actual": round(self._actual_fps, 2),
             "timestamp": datetime.now().isoformat(),
             "resolution": list(self._camera.get_resolution()),
             "laser_events": self._laser_events
