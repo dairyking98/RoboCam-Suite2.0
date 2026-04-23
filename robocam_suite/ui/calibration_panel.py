@@ -647,10 +647,9 @@ class CalibrationPanel(QWidget):
             self.brightness_spin.blockSignals(False)
             self.bandwidth_spin.blockSignals(False)
             self.binning_check.blockSignals(False)
-
     def _on_camera_params_changed(self):
-        # Persist to session immediately so it's not lost
-        self._session.update_session("calibration", {
+        # Persist to session immediately so it\'s not lost
+        self._session.update_session("camera_settings", {
             "exposure_ms": self.exp_spin.value(),
             "gain": self.gain_spin.value(),
             "auto_exposure": self.auto_exp_check.isChecked(),
@@ -1077,6 +1076,16 @@ class CalibrationPanel(QWidget):
     def _load_from_session(self):
         s = self._session.get_session("calibration")
         step = s.get("step_size", "1.0")
+
+        camera_s = self._session.get_session("camera_settings")
+        if camera_s:
+            self.exp_spin.setValue(camera_s.get("exposure_ms", 20))
+            self.gain_spin.setValue(camera_s.get("gain", 100))
+            self.auto_exp_check.setChecked(camera_s.get("auto_exposure", False))
+            self.auto_gain_check.setChecked(camera_s.get("auto_gain", False))
+            self.brightness_spin.setValue(camera_s.get("target_brightness", 100))
+            self.bandwidth_spin.setValue(camera_s.get("usb_bandwidth", 50))
+            self.binning_check.setChecked(camera_s.get("hardware_bin", False))
         
         matched = False
         for btn in self._step_btn_group.buttons():
