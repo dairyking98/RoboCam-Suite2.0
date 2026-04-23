@@ -13,10 +13,13 @@
         "driver": "opencv",
         "camera_index": 0,
         "resolution": [1920, 1080],
-        "fps": 30.0
+        "fps": 30.0,
+        "exposure": 20000,
+        "gain": 100,
+        "target_brightness": 100
     },
     "gpio_controller": {
-        "enabled": false,
+        "enabled": true,
         "_enabled_note": "Set to true only when an Arduino or GPIO device is physically connected. When false, laser and GPIO commands are silently ignored.",
         "driver": "arduino_serial",
         "port": "auto",
