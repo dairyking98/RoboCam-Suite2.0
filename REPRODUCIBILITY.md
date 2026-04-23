@@ -128,3 +128,14 @@ To verify the camera settings persistence and the "Reset to Defaults" functional
 3.  **Verify Persistent Settings**: Navigate back to the "Calibration" tab. Confirm that the camera settings you previously adjusted are still set to their last-used values, demonstrating persistence across sessions.
 4.  **Test "Reset to Defaults"**: Click the "Reset to Defaults" button in the "Camera Controls" group. Observe that all camera settings immediately revert to their default values.
 5.  **Verify Defaults Applied**: Confirm that the camera hardware also reflects these default settings (e.g., by observing the live preview or re-checking values if the camera provides a way to read them back).
+
+## 13. Fix for AttributeError: 'NoneType' object has no attribute 'experiment_started'
+
+**Problem:** An `AttributeError` occurred because `ExperimentPanel` was attempting to connect signals to `self.experiment_runner` in its `__init__` method. However, `self.experiment_runner` is only instantiated when an experiment is started (i.e., when `_start_experiment` is called), leading to a `NoneType` error at application startup.
+
+**Solution:**
+1.  **Delayed Signal Connection:** The signal connections for `experiment_started` and `experiment_finished` were moved from `ExperimentPanel.__init__` to the `_start_experiment` method. This ensures that these connections are only established after `self.experiment_runner` has been properly instantiated.
+
+**Verification:**
+1.  **Start the RoboCam-Suite UI**: Confirm that the application launches without any `AttributeError` related to `experiment_runner`.
+2.  **Run an Experiment**: Start and stop an experiment to ensure that the recording overlay and tab locking/unlocking functionality work as expected, confirming that the signals are now correctly connected when the experiment runner is active.
