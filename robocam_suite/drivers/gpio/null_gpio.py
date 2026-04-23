@@ -28,6 +28,10 @@ class NullGPIOController(GPIOController):
         logger.debug(f"NullGPIOController: read_pin(pin={pin}) — returning False.")
         return False
 
+    def get_laser_state(self) -> bool:
+        """Simulate laser state, always off for NullGPIOController."""
+        return False
+
     @property
     def is_connected(self) -> bool:
         return True  # Always report as "connected" so callers never block

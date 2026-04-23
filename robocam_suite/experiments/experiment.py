@@ -165,7 +165,7 @@ class _WellRecorder:
 
     def _save_metadata(self):
         """Save a JSON metadata file alongside the video."""
-        meta_path = self._output_path.rsplit(".", 1)[0] + "_metadata.json"
+        meta_path = self._output_path.parent / (self._output_path.stem + "_metadata.json")
         duration = (self._end_time - self._start_time) if self._start_time and self._end_time else 0
         
         import json
