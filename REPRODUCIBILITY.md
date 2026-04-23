@@ -224,3 +224,18 @@ This was caused by the `_is_experiment_active` attribute not being initialized i
 4.  **Re-launch Application:** Open RoboCam-Suite 2.0 again.
 5.  **Verify Settings:** Navigate to the "Calibration" tab and confirm that the camera settings previously set are now displayed in the UI and applied to the camera.
 6.  **Reset to Defaults:** Click the "Reset to Defaults" button and confirm that settings revert to their default values (20ms exposure, 100 gain, 100 target brightness, etc.).
+
+## 20. Fix for NullGPIOController and Metadata Path Handling
+
+**Problem:**
+1.  `AttributeError: 'NullGPIOController' object has no attribute 'get_laser_state'` occurred because the `NullGPIOController` (used when GPIO is disabled) was missing the `get_laser_state` method, which was being called by `_WellRecorder`.
+2.  `AttributeError: 'PosixPath' object has no attribute 'rsplit'` occurred in `_save_metadata` because `self._output_path` was a `pathlib.Path` object, and `rsplit` is a string method.
+
+**Solution:**
+1.  **Add `get_laser_state` to `NullGPIOController`**: Implemented a `get_laser_state` method in `robocam_suite/drivers/gpio/null_gpio.py` that always returns `False`, ensuring compatibility when GPIO is disabled.
+2.  **Correct `Path` object handling**: Modified `_save_metadata` in `robocam_suite/experiments/experiment.py` to correctly extract the filename stem and construct the metadata path using `pathlib.Path` methods (`.parent` and `.stem`) instead of string manipulation (`.rsplit`).
+
+**Verification:**
+1.  **Run an Experiment**: Start a video capture experiment with GPIO disabled.
+2.  **Verify Recording**: Ensure the experiment runs without crashing and that video files are successfully recorded.
+3.  **Check Metadata**: Open the generated metadata JSON file and confirm that `video_file` and other fields are correctly populated.
