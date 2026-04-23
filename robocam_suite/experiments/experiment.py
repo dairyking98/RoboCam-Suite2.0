@@ -26,6 +26,7 @@ Snake   — alternating direction each row (passed to WellPlate)
 """
 import os
 import time
+import subprocess
 import csv
 import threading
 from datetime import datetime
@@ -145,6 +146,7 @@ class _WellRecorder:
             self._actual_fps = self._frames_captured / duration if duration > 0 else 0.0
             self._save_metadata()
             logger.info(f"[WellRecorder] Saved {self._output_path} ({self._frames_captured} frames, actual FPS: {self._actual_fps:.2f})")
+            self._post_process_video_fps()
 
     def _emit_proxy(self, frame):
         """Convert BGR frame to QImage and call the proxy callback."""
@@ -189,6 +191,30 @@ class _WellRecorder:
 
     def stop(self):
         self._stop_event.set()
+
+    def _post_process_video_fps(self):
+        """Rewrites the video file with the actual FPS using ffmpeg."""
+        if self._actual_fps == 0 or self._actual_fps == self._fps:
+            logger.info(f"[WellRecorder] No FPS adjustment needed for {self._output_path}.")
+            return
+
+        temp_output_path = self._output_path.with_name(f"temp_{self._output_path.name}")
+        command = [
+            "ffmpeg",
+            "-i", str(self._output_path),
+            "-r", str(self._actual_fps),
+            "-c", "copy",
+            str(temp_output_path)
+        ]
+        logger.info(f"[WellRecorder] Adjusting FPS for {self._output_path} to {self._actual_fps:.2f} using ffmpeg.")
+        try:
+            subprocess.run(command, check=True, capture_output=True)
+            os.replace(temp_output_path, self._output_path)
+            logger.info(f"[WellRecorder] Successfully adjusted FPS for {self._output_path}.")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"[WellRecorder] ffmpeg failed for {self._output_path}: {e.stderr.decode()}")
+        except Exception as e:
+            logger.error(f"[WellRecorder] Error during FPS adjustment for {self._output_path}: {e}")
         self._thread.join(timeout=5.0)
 
 
