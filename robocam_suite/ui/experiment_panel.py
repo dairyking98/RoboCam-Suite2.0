@@ -386,9 +386,6 @@ class ExperimentPanel(QWidget):
         self._grabber.camera_disconnected.connect(self._update_resolution_label)
         self._grabber.start()
 
-        # Wire experiment runner signals to live preview
-        self.experiment_runner.experiment_started.connect(lambda: self._live_preview.set_experiment_active(True))
-        self.experiment_runner.experiment_finished.connect(lambda: self._live_preview.set_experiment_active(False))
         
         # Initial resolution
         self._update_resolution_label()
@@ -743,6 +740,8 @@ class ExperimentPanel(QWidget):
         self.experiment_runner.proxy_frame.connect(self._live_preview.update_frame)
         self.experiment_runner.experiment_started.connect(lambda: self._live_preview.set_experiment_active(True))
         self.experiment_runner.experiment_finished.connect(lambda: self._live_preview.set_experiment_active(False))
+        self.experiment_runner.experiment_started.connect(self.experiment_started.emit)
+        self.experiment_runner.experiment_finished.connect(self.experiment_finished.emit)
         
         # Pause preview to prevent SDK contention
         self._grabber.set_paused(True)
