@@ -457,7 +457,6 @@ class CalibrationPanel(QWidget):
         self.z_minus_btn.clicked.connect(lambda: self._move("z", -1))
         self.home_btn.clicked.connect(self._home)
 
-        self._set_movement_controls_enabled(False) # Disable until homed
 
         return grp
 
@@ -1043,6 +1042,7 @@ class CalibrationPanel(QWidget):
             if not self._is_homed and (pos[0] != 0.0 or pos[1] != 0.0 or pos[2] != 0.0):
                 self._is_homed = True
                 self._set_movement_controls_enabled(True)
+                self._set_camera_controls_enabled(True)
 
         except Exception as e:
             logger.error(f"[CalibrationPanel] Error updating position display: {e}")
@@ -1100,6 +1100,10 @@ class CalibrationPanel(QWidget):
         # Initial check for homing status
         self._update_position_display()
 
+        # Disable movement and camera controls until homed
+        self._set_movement_controls_enabled(False)
+        self._set_camera_controls_enabled(False)
+
     def _set_movement_controls_enabled(self, enabled: bool):
         self.y_plus_btn.setEnabled(enabled)
         self.x_minus_btn.setEnabled(enabled)
@@ -1119,30 +1123,21 @@ class CalibrationPanel(QWidget):
 
         # The home button should always be enabled
         self.home_btn.setEnabled(True)
-        self.auto_exp_check.blockSignals(True)
-        self.auto_gain_check.blockSignals(True)
-        self.brightness_spin.blockSignals(True)
-        self.bandwidth_spin.blockSignals(True)
-        self.binning_check.blockSignals(True)
 
-        self.exp_spin.setValue(int(s.get("exposure_ms", 20)))
-        self.gain_spin.setValue(int(s.get("gain", 100)))
-        self.auto_exp_check.setChecked(bool(s.get("auto_exposure", False)))
-        self.auto_gain_check.setChecked(bool(s.get("auto_gain", False)))
-        self.brightness_spin.setValue(int(s.get("target_brightness", 100)))
-        self.bandwidth_spin.setValue(int(s.get("usb_bandwidth", 80)))
-        self.binning_check.setChecked(bool(s.get("hardware_bin", False)))
-        
-        self.exp_spin.setEnabled(not self.auto_exp_check.isChecked())
-        self.gain_spin.setEnabled(not self.auto_gain_check.isChecked())
+    def _set_camera_controls_enabled(self, enabled: bool):
+        self.exp_spin.setEnabled(enabled)
+        self.gain_spin.setEnabled(enabled)
+        self.auto_exp_check.setEnabled(enabled)
+        self.auto_gain_check.setEnabled(enabled)
+        self.brightness_spin.setEnabled(enabled)
+        self.bandwidth_spin.setEnabled(enabled)
+        self.binning_check.setEnabled(enabled)
 
-        self.exp_spin.blockSignals(False)
-        self.gain_spin.blockSignals(False)
-        self.auto_exp_check.blockSignals(False)
-        self.auto_gain_check.blockSignals(False)
-        self.brightness_spin.blockSignals(False)
-        self.bandwidth_spin.blockSignals(False)
-        self.binning_check.blockSignals(False)
+        # Re-apply auto-exposure/gain logic
+        if enabled:
+            self.exp_spin.setEnabled(not self.auto_exp_check.isChecked())
+            self.gain_spin.setEnabled(not self.auto_gain_check.isChecked())
+
 
         # Attempt to auto-load the most recently saved calibration file;
         # only fall back to bare session values if no file is found.
