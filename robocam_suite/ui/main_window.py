@@ -10,6 +10,7 @@ Tab order
 Setup → Calibration → Experiment → Manual Control
 """
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QTabWidget
+from PySide6.QtCore import QTimer
 
 from robocam_suite.hw_manager import hw_manager
 from robocam_suite.session_manager import session_manager
