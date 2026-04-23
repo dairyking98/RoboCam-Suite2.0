@@ -150,3 +150,16 @@ To verify the camera settings persistence and the "Reset to Defaults" functional
 **Verification:**
 1.  **Start the RoboCam-Suite UI**: Confirm that the application launches and the "Experiment" tab's live preview renders without any `AttributeError` in the console or logs.
 2.  **Run an Experiment**: Verify that the "● RECORDING" overlay appears correctly when an experiment starts and disappears when it finishes.
+
+## 15. Fix for Live Preview Not Working (AttributeError in _LivePreview)
+
+**Problem:** The live preview stopped working due to an `AttributeError: 
+'_LivePreview' object has no attribute '_is_experiment_active'` during the `paintEvent`.
+This was caused by the `_is_experiment_active` attribute not being initialized in the `_LivePreview` class's `__init__` method.
+
+**Solution:**
+1.  **Initialize `_is_experiment_active`**: Added `self._is_experiment_active = False` to the `_LivePreview.__init__` method to ensure the attribute is always present upon object creation.
+
+**Verification:**
+1.  **Start the RoboCam-Suite UI**: Confirm that the application launches and the live camera preview is displayed correctly in the "Calibration" and "Experiment" tabs.
+2.  **Run an Experiment**: Verify that the "● RECORDING" overlay appears and disappears as expected during an experiment, confirming that `_is_experiment_active` is being correctly updated.
