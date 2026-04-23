@@ -118,3 +118,13 @@ homing enforcement.
 1.  **Start the RoboCam-Suite UI**: Confirm that the application launches without any `AttributeError` related to `auto_exp_check` or other camera control widgets.
 2.  **Observe Initial State**: Verify that both movement controls and camera controls are initially disabled, and the "Home" button is the only active movement control.
 3.  **Perform Homing**: Click the "Home" button. After successful homing, confirm that both movement controls and camera controls become enabled.
+
+## 12. Camera Settings Persistence and Reset to Defaults Verification
+
+To verify the camera settings persistence and the "Reset to Defaults" functionality:
+
+1.  **Modify Camera Settings**: In the "Calibration" tab, adjust several camera settings (e.g., Exposure, Gain, Auto-Exposure, USB Bandwidth) to non-default values.
+2.  **Close and Reopen Application**: Close the RoboCam-Suite application and then restart it.
+3.  **Verify Persistent Settings**: Navigate back to the "Calibration" tab. Confirm that the camera settings you previously adjusted are still set to their last-used values, demonstrating persistence across sessions.
+4.  **Test "Reset to Defaults"**: Click the "Reset to Defaults" button in the "Camera Controls" group. Observe that all camera settings immediately revert to their default values.
+5.  **Verify Defaults Applied**: Confirm that the camera hardware also reflects these default settings (e.g., by observing the live preview or re-checking values if the camera provides a way to read them back).
