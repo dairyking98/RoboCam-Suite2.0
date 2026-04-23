@@ -239,3 +239,20 @@ This was caused by the `_is_experiment_active` attribute not being initialized i
 1.  **Run an Experiment**: Start a video capture experiment with GPIO disabled.
 2.  **Verify Recording**: Ensure the experiment runs without crashing and that video files are successfully recorded.
 3.  **Check Metadata**: Open the generated metadata JSON file and confirm that `video_file` and other fields are correctly populated.
+
+## 21. Re-implementation of Laser ON Indicator and Dynamic FPS Adjustment
+
+**Problem:** Previous attempts to implement the laser ON indicator and dynamic FPS adjustment caused issues with the live preview. The laser indicator was being drawn on the live preview frames, and the FPS adjustment was not robust.
+
+**Solution:**
+1.  **Laser ON Indicator:** The laser ON indicator (asterisk `*`) is now drawn only on a *copy* of the frame (`frame_to_write`) that is specifically used for video recording in `_WellRecorder._run` (in `robocam_suite/experiments/experiment.py`). This ensures that the live preview (`_emit_proxy(frame)`) remains unaffected.
+2.  **Dynamic FPS Adjustment:**
+    *   The `_WellRecorder` class now calculates `_actual_fps` based on the number of frames captured and the actual duration of the recording.
+    *   A new method `_post_process_video_fps` has been added to `_WellRecorder` which uses `ffmpeg` to rewrite the video file header with the `_actual_fps`. This ensures that the recorded AVI file plays back at the correct speed.
+    *   The `subprocess` module was imported in `experiment.py` to execute `ffmpeg` commands.
+
+**Verification:**
+1.  **Run an Experiment:** Start a video capture experiment with the laser configured to turn ON during recording.
+2.  **Live Preview:** Observe the live preview in the application. Confirm that the asterisk (`*`) laser ON indicator does *not* appear in the live preview.
+3.  **Recorded Video (Laser Indicator):** After the experiment, open the recorded AVI file. Confirm that the asterisk (`*`) laser ON indicator *is* visible in the top-left corner of the video frames when the laser was active.
+4.  **Recorded Video (FPS Adjustment):** Check the metadata JSON file (`_metadata.json`) generated alongside the video. Verify that `fps_actual` is present and reflects the actual capture rate. Play the recorded AVI file and confirm that its playback speed is accurate and matches the `duration_seconds` in the metadata.
