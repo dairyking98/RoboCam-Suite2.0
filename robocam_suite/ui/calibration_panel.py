@@ -1104,14 +1104,16 @@ class CalibrationPanel(QWidget):
         if not self._auto_load_latest_calibration():
             self.cols_spin.setValue(int(s.get("cols", 0)))
             self.rows_spin.setValue(int(s.get("rows", 0)))
-            saved_corners = s.get("corners", {})
-            for name, pos in saved_corners.items():
+            saved_corners = s.get("corners", {})            for name, pos in saved_corners.items():
                 if pos is not None and name in self.corners:
                     self.corners[name]["position"] = pos
-                    self.corners[name]["label"].setText(
-                        f"X:{pos[0]:.2f}  Y:{pos[1]:.2f}  Z:{pos[2]:.2f}"
-                    )
-                    self.corners[name]["label"].setStyleSheet("color: green;")
+                    self.corners[name]["label"].setText(f"X:{pos[0]:.2f} Y:{pos[1]:.2f} Z:{pos[2]:.2f}")
+            
+            self._generate_well_map()
+            # Explicitly emit that corners are loaded from session
+            self.corners_changed.emit()
+        
+        # Finally, refresh camera settings if a camera is connected
 
     def _auto_load_latest_calibration(self) -> bool:
         """Find the most recently modified .json file in the calibration
@@ -1153,4 +1155,7 @@ class CalibrationPanel(QWidget):
         self._cal_status_label.setText(f"Loaded: {path.name}")
         self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
         logger.info(f"[Calibration] Auto-loaded calibration from {path}")
+        
+        self._generate_well_map()
+        self.corners_changed.emit()
         return True

@@ -863,3 +863,7 @@ class ExperimentPanel(QWidget):
     def _load_from_session(self):
         s = self._session.get_session("experiment")
         self._apply_values(s)
+        
+        # Ensure the experiment is locked on startup until calibration is explicitly synced
+        self.well_selection.clear_calibration()
+        self.start_btn.setEnabled(False)

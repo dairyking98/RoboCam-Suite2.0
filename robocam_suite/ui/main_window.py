@@ -55,8 +55,6 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.manual_control_panel, "Manual Control")
 
         # Wire calibration → experiment auto-sync
-        # Sync once on startup (picks up any session-restored calibration)
-        self.experiment_panel.sync_from_calibration()
         # Re-sync whenever the user changes rows, columns, or corner positions
         self.calibration_panel.cols_spin.valueChanged.connect(
             lambda _: self.experiment_panel.sync_from_calibration()
