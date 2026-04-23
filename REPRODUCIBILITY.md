@@ -82,3 +82,14 @@ To verify the recording overlay and tab locking functionality:
 4.  **Verify Tab Locking**: Attempt to switch to the "Setup", "Calibration", and "Manual Control" tabs. Confirm that these tabs are disabled and cannot be selected while the experiment is running.
 5.  **Stop Experiment**: Stop the ongoing experiment.
 6.  **Verify Controls Restored**: Confirm that the "RECORDING" overlay disappears from the live preview and the "Setup", "Calibration", and "Manual Control" tabs become enabled again.
+
+## 9. Dynamic FPS Adjustment Verification
+
+To verify that recorded AVI files play back at their actual capture FPS:
+
+1.  **Run an Experiment**: Conduct a video capture experiment in the RoboCam-Suite UI.
+2.  **Locate Output Files**: After the experiment, navigate to the output directory (e.g., `~/Documents/RoboCam/captures/`). You should find an AVI file (e.g., `well_C3.avi`) and a corresponding JSON metadata file (e.g., `well_C3_metadata.json`).
+3.  **Inspect Metadata**: Open the JSON metadata file and note the `fps_actual` value.
+4.  **Play Video**: Open the AVI file using a video player (e.g., VLC Media Player, mpv). Observe the playback speed.
+5.  **Verify Playback Speed**: Confirm that the video plays back at a speed consistent with the `fps_actual` value from the metadata. The video should not appear to speed up or slow down unnaturally due to an incorrect FPS header.
+6.  **Check FFmpeg Logs**: Review the application logs (or console output if running directly) for messages indicating that FFmpeg was invoked and successfully corrected the video FPS.
