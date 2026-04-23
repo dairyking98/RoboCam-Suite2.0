@@ -215,7 +215,6 @@ class _WellRecorder:
             logger.error(f"[WellRecorder] ffmpeg failed for {self._output_path}: {e.stderr.decode()}")
         except Exception as e:
             logger.error(f"[WellRecorder] Error during FPS adjustment for {self._output_path}: {e}")
-        self._thread.join(timeout=5.0)
 
 
 # ---------------------------------------------------------------------------
