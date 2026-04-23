@@ -93,3 +93,13 @@ To verify that recorded AVI files play back at their actual capture FPS:
 4.  **Play Video**: Open the AVI file using a video player (e.g., VLC Media Player, mpv). Observe the playback speed.
 5.  **Verify Playback Speed**: Confirm that the video plays back at a speed consistent with the `fps_actual` value from the metadata. The video should not appear to speed up or slow down unnaturally due to an incorrect FPS header.
 6.  **Check FFmpeg Logs**: Review the application logs (or console output if running directly) for messages indicating that FFmpeg was invoked and successfully corrected the video FPS.
+
+## 10. Laser ON Indicator Verification
+
+To verify the visual laser ON indicator on recorded video frames:
+
+1.  **Configure Laser**: Ensure the laser is enabled and configured in the "Setup" tab.
+2.  **Run a Video Experiment with Laser Activation**: Start a video capture experiment in the "Experiment" tab where the laser is programmed to turn ON for a duration (e.g., using the "Laser ON Duration" setting).
+3.  **Locate Output Video**: After the experiment, find the recorded AVI file in the output directory.
+4.  **Play Video**: Open the AVI file with a video player.
+5.  **Observe Laser Indicator**: During the segments of the video where the laser was active, confirm that a white asterisk (`*`) is displayed in the top-left corner of the video frame. The asterisk should disappear when the laser is off.
