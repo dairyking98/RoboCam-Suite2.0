@@ -51,9 +51,10 @@ MODE_IMAGE = "Image Capture"
 class _WellRecorder:
     """Records video from the camera into a file in a background thread."""
 
-    def __init__(self, camera, output_path: str, fps: float = 30.0, on_proxy_frame=None):
+    def __init__(self, camera, hw_manager, output_path: str, fps: float = 30.0, on_proxy_frame=None):
         self._camera = camera
-        self._output_path = output_path
+        self._output_path = Path(output_path)
+        self._hw_manager = hw_manager
         self._fps = fps
         self._on_proxy_frame = on_proxy_frame
         self._stop_event = threading.Event()
@@ -347,7 +348,7 @@ class Experiment:
             # 2. Start recording
             if camera.is_connected:
                 self._on_status(f"{prefix}Recording {well_id} (laser off — {off_pre:.1f}s)")
-                recorder = _WellRecorder(camera, video_path, on_proxy_frame=self._on_proxy_frame)
+                recorder = _WellRecorder(camera, self.hw_manager, video_path, on_proxy_frame=self._on_proxy_frame)
                 logger.info(f"[Experiment] Recording → {video_path}")
             else:
                 logger.warning("[Experiment] Camera not connected — skipping recording.")
