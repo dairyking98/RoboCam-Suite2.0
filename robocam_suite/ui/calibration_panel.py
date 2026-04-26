@@ -970,8 +970,9 @@ class CalibrationPanel(QWidget):
                 "JSON Files (*.json)"
             )
             if not path:
-                return
-        else:
+                # User cancelled, do not load anything and do not save a 'False' path
+                session_manager.update_session("calibration", {"last_calibration_path": None})
+                return False       else:
             # Ensure path is a Path object if it came from session_manager as str
             path = Path(path)
         try:
@@ -1118,7 +1119,7 @@ class CalibrationPanel(QWidget):
 
         # Load last used calibration file
         last_cal_path = session_manager.get_session("calibration").get("last_calibration_path")
-        if last_cal_path:
+        if last_cal_path and last_cal_path != "None": # Check for both None and the string "None"
             logger.info(f"[Calibration] Auto-loading calibration from {last_cal_path}")
             self._load_calibration(Path(last_cal_path))
 
