@@ -5,7 +5,6 @@ from typing import Optional
 
 from PyQt5.QtCore import pyqtSignal, QTimer
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox, QGroupBox, QRadioButton, QButtonGroup, QFileDialog, QMessageBox, QComboBox)
-
 from robocam_suite.session_manager import session_manager
 from robocam_suite.config.default_config import _default_cal_dir
 from robocam_suite.hw_manager import HWManager
