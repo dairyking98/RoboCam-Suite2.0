@@ -957,7 +957,7 @@ class CalibrationPanel(QWidget):
             self._cal_status_label.setText(f"Saved: {Path(path).name}")
             self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
             logger.info(f"[Calibration] Saved to {path}")
-            session_manager.set("last_calibration_path", str(path))
+            session_manager.update_session("calibration", {"last_calibration_path": str(path)})
         except OSError as e:
             QMessageBox.critical(self, "Save Error", str(e))
 
@@ -1117,7 +1117,8 @@ class CalibrationPanel(QWidget):
         self.gain_spin.blockSignals(True)
 
         # Load last used calibration file
-        last_cal_path = session_manager.get("last_calibration_path")
+        s = session_manager.get_session("calibration")
+        last_cal_path = s.get("last_calibration_path")
         if last_cal_path:
             logger.info(f"[Calibration] Auto-loading calibration from {last_cal_path}")
             self._load_calibration(Path(last_cal_path))
