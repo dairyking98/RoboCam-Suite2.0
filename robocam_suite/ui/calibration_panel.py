@@ -957,18 +957,23 @@ class CalibrationPanel(QWidget):
             self._cal_status_label.setText(f"Saved: {Path(path).name}")
             self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
             logger.info(f"[Calibration] Saved to {path}")
+            session_manager.set("last_calibration_path", path)
         except OSError as e:
             QMessageBox.critical(self, "Save Error", str(e))
 
-    def _load_calibration(self):
-        cal_dir = self._get_cal_dir()
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load Calibration",
-            str(cal_dir),
-            "JSON Files (*.json)"
-        )
-        if not path:
-            return
+    def _load_calibration(self, path: Optional[Path] = None):
+        if path is None:
+            cal_dir = self._get_cal_dir()
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Load Calibration",
+                str(cal_dir),
+                "JSON Files (*.json)"
+            )
+            if not path:
+                return
+        else:
+            # Ensure path is a Path object if it came from session_manager as str
+            path = Path(path)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -1111,12 +1116,25 @@ class CalibrationPanel(QWidget):
         self.exp_spin.blockSignals(True)
         self.gain_spin.blockSignals(True)
 
+        # Load last used calibration file
+        last_cal_path = session_manager.get("last_calibration_path")
+        if last_cal_path:
+            logger.info(f"[Calibration] Auto-loading calibration from {last_cal_path}")
+            self._load_calibration(Path(last_cal_path))
+
         # Initial check for homing status
         self._update_position_display()
 
-        # Disable movement and camera controls until homed
-        self._set_movement_controls_enabled(False)
-        self._set_camera_controls_enabled(False)
+        # Check initial printer position and enforce homing if at (0,0,0)
+        initial_pos = self.hw_manager.get_motion_controller().get_current_position()
+        if initial_pos == (0.0, 0.0, 0.0):
+            self._set_movement_controls_enabled(False)
+            self._set_camera_controls_enabled(False)
+            self.status_label.setText("<b style=\"color: red;\">Homing Required: Printer at (0,0,0). Please Home.</b>")
+        else:
+            self._set_movement_controls_enabled(True)
+            self._set_camera_controls_enabled(True)
+            self.status_label.setText("Ready.")
 
     def _set_movement_controls_enabled(self, enabled: bool):
         self.y_plus_btn.setEnabled(enabled)
@@ -1223,7 +1241,8 @@ class CalibrationPanel(QWidget):
 
         self._cal_status_label.setText(f"Loaded: {path.name}")
         self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
-        logger.info(f"[Calibration] Auto-loaded calibration from {path}")
+              logger.info(f"[Calibration] Saved calibration to {path}")
+            session_manager.set("last_calibration_path", path)")
         
         self._generate_well_map()
         self.corners_changed.emit()
