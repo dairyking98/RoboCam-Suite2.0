@@ -279,3 +279,29 @@ This was caused by the `_is_experiment_active` attribute not being initialized i
     *   Load a calibration file manually using the "Load Calibration" button.
     *   Close and restart the application.
     *   Verify that the application automatically loads the last used calibration file, and the well map is displayed correctly.
+
+## 23. Fix IndentationError in calibration_panel.py
+
+**Problem:**
+An `IndentationError` occurred in `calibration_panel.py` due to incorrect spacing, specifically in the `_save_calibration` and `_auto_load_latest_calibration` methods, leading to application startup failure.
+
+**Solution:**
+Corrected the indentation and placement of the `session_manager.set("last_calibration_path", str(path))` call within the `_save_calibration` method and removed a misplaced and incorrectly indented `session_manager.set` call from `_auto_load_latest_calibration`.
+
+**Verification:**
+1.  Start the application. Verify that it launches without `IndentationError`.
+2.  Save a calibration file. Verify that the `last_calibration_path` is correctly saved in the session.
+3.  Restart the application. Verify that the last saved calibration is automatically loaded.
+
+## 24. Fix SessionManager AttributeError in calibration_panel.py
+
+**Problem:**
+An `AttributeError: 'SessionManager' object has no attribute 'get'` occurred when trying to retrieve `"last_calibration_path"` from the `session_manager` in `_load_from_session`.
+
+**Solution:**
+Corrected the call to retrieve `"last_calibration_path"` by first getting the `"calibration"` section from the `session_manager` using `session_manager.get_session("calibration")`, and then calling `get()` on the returned section object. This aligns with the `SessionManager`'s API.
+
+**Verification:**
+1.  Start the application. Verify that it launches without `AttributeError`.
+2.  Save a calibration file. Verify that the `last_calibration_path` is correctly saved in the session.
+3.  Restart the application. Verify that the last saved calibration is automatically loaded.
