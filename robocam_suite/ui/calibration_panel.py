@@ -957,7 +957,7 @@ class CalibrationPanel(QWidget):
             self._cal_status_label.setText(f"Saved: {Path(path).name}")
             self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
             logger.info(f"[Calibration] Saved to {path}")
-            session_manager.set("last_calibration_path", path)
+            session_manager.set("last_calibration_path", str(path))
         except OSError as e:
             QMessageBox.critical(self, "Save Error", str(e))
 
@@ -1241,9 +1241,6 @@ class CalibrationPanel(QWidget):
 
         self._cal_status_label.setText(f"Loaded: {path.name}")
         self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
-              logger.info(f"[Calibration] Saved calibration to {path}")
-            session_manager.set("last_calibration_path", path)")
-        
         self._generate_well_map()
         self.corners_changed.emit()
         return True
