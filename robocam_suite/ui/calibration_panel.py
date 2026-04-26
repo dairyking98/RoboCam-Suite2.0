@@ -972,7 +972,8 @@ class CalibrationPanel(QWidget):
             if not path:
                 # User cancelled, do not load anything and do not save a 'False' path
                 session_manager.update_session("calibration", {"last_calibration_path": None})
-                return False       else:
+                return False
+            else:
             # Ensure path is a Path object if it came from session_manager as str
             path = Path(path)
         try:
