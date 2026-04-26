@@ -1117,8 +1117,7 @@ class CalibrationPanel(QWidget):
         self.gain_spin.blockSignals(True)
 
         # Load last used calibration file
-        s = session_manager.get_session("calibration")
-        last_cal_path = s.get("last_calibration_path")
+        last_cal_path = session_manager.get_session("calibration").get("last_calibration_path")
         if last_cal_path:
             logger.info(f"[Calibration] Auto-loading calibration from {last_cal_path}")
             self._load_calibration(Path(last_cal_path))
