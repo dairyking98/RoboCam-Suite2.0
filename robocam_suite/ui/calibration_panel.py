@@ -1130,11 +1130,11 @@ class CalibrationPanel(QWidget):
         if initial_pos == (0.0, 0.0, 0.0):
             self._set_movement_controls_enabled(False)
             self._set_camera_controls_enabled(False)
-            self.status_label.setText("<b style=\"color: red;\">Homing Required: Printer at (0,0,0). Please Home.</b>")
+            self._cal_status_label.setText("<b style=\"color: red;\">Homing Required: Printer at (0,0,0). Please Home.</b>")
         else:
             self._set_movement_controls_enabled(True)
             self._set_camera_controls_enabled(True)
-            self.status_label.setText("Ready.")
+            self._cal_status_label.setText("Ready.")
 
     def _set_movement_controls_enabled(self, enabled: bool):
         self.y_plus_btn.setEnabled(enabled)
