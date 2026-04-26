@@ -256,3 +256,26 @@ This was caused by the `_is_experiment_active` attribute not being initialized i
 2.  **Live Preview:** Observe the live preview in the application. Confirm that the asterisk (`*`) laser ON indicator does *not* appear in the live preview.
 3.  **Recorded Video (Laser Indicator):** After the experiment, open the recorded AVI file. Confirm that the asterisk (`*`) laser ON indicator *is* visible in the top-left corner of the video frames when the laser was active.
 4.  **Recorded Video (FPS Adjustment):** Check the metadata JSON file (`_metadata.json`) generated alongside the video. Verify that `fps_actual` is present and reflects the actual capture rate. Play the recorded AVI file and confirm that its playback speed is accurate and matches the `duration_seconds` in the metadata.
+
+## 22. Homing Enforcement on Startup and Automatic Calibration Loading
+
+**Problem:**
+1.  The system did not enforce homing if the printer started at (0,0,0), which could lead to unexpected movements or collisions.
+2.  Users had to manually load calibration files after each startup, which was inconvenient.
+
+**Solution:**
+1.  **Homing Enforcement:** In `CalibrationPanel.__init__` (in `robocam_suite/ui/calibration_panel.py`), the initial printer position is now queried. If it is (0,0,0), movement and camera controls are disabled, and a warning message is displayed, requiring the user to home the printer before any operations.
+2.  **Automatic Calibration Loading:**
+    *   The `_save_calibration` method now saves the path of the successfully saved calibration file to the `session_manager` under the key `"last_calibration_path"`.
+    *   The `_load_from_session` method in `CalibrationPanel` now checks for `"last_calibration_path"` in the `session_manager` on startup. If found, it automatically attempts to load the calibration file.
+    *   The `_load_calibration` method has been refactored to accept an optional `path` argument, allowing it to be called directly with a file path for automatic loading, or to open a file dialog if no path is provided.
+
+**Verification:**
+1.  **Homing Enforcement:**
+    *   Start the application with the printer in an unhomed state (or simulate it being at 0,0,0 if possible).
+    *   Verify that movement and camera controls are disabled and a red warning message "Homing Required: Printer at (0,0,0). Please Home." is displayed.
+    *   Perform a homing operation. Verify that the controls become enabled and the status message changes to "Ready."
+2.  **Automatic Calibration Loading:**
+    *   Load a calibration file manually using the "Load Calibration" button.
+    *   Close and restart the application.
+    *   Verify that the application automatically loads the last used calibration file, and the well map is displayed correctly.
