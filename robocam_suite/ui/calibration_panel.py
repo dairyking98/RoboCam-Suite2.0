@@ -974,8 +974,8 @@ class CalibrationPanel(QWidget):
                 session_manager.update_session("calibration", {"last_calibration_path": None})
                 return False
             else:
-            # Ensure path is a Path object if it came from session_manager as str
-            path = Path(path)
+                # Ensure path is a Path object if it came from session_manager as str
+                path = Path(path)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
