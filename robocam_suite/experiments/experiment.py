@@ -1,53 +1,13 @@
-"""
-Experiment engine — executes a well-plate imaging sequence.
-
-Modes
------
-Video Capture (default)
-    Per-well sequence:
-        1. Move to well
-        2. Dwell (settle) — laser OFF, recording starts
-        3. Laser ON for `video_laser_on` seconds — recording continues
-        4. Laser OFF for `video_laser_off_post` seconds — recording continues
-        5. Stop recording
-        6. Post-well delay before moving to next well
-
-Image Capture
-    Per-well sequence:
-        1. Move to well
-        2. Dwell (settle)
-        3. Capture single image
-        4. Post-well delay
-
-Scan patterns
--------------
-Raster  — left-to-right every row
-Snake   — alternating direction each row (passed to WellPlate)
-"""
 import os
 import time
-import subprocess
-import csv
 import threading
-from datetime import datetime
+import subprocess
+import logging
 from pathlib import Path
-from typing import List, Tuple, Dict, Any, Optional
-
+from datetime import datetime
 import cv2
 
-from robocam_suite.hw_manager import HardwareManager
-from robocam_suite.experiments.well_plate import WellPlate
-from robocam_suite.logger import setup_logger
-
-logger = setup_logger()
-
-MODE_VIDEO = "Video Capture"
-MODE_IMAGE = "Image Capture"
-
-
-# ---------------------------------------------------------------------------
-# Video recorder helper
-# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
 
 class _WellRecorder:
     """Records video from the camera into a file in a background thread."""
@@ -148,7 +108,6 @@ class _WellRecorder:
             self._actual_fps = self._frames_captured / duration if duration > 0 else 0.0
             self._save_metadata()
             logger.info(f"[WellRecorder] Saved {self._output_path} ({self._frames_captured} frames, actual FPS: {self._actual_fps:.2f})")
-            self._post_process_video()
 
     def _emit_proxy(self, frame):
         """Convert BGR frame to QImage and call the proxy callback."""
@@ -170,7 +129,6 @@ class _WellRecorder:
     def _save_metadata(self):
         """Save a JSON metadata file alongside the video."""
         meta_path = self._output_path.parent / (self._output_path.stem + "_metadata.json")
-        duration = (self._end_time - self._start_time) if self._start_time and self._end_time else 0
         
         import json
         metadata = {
@@ -205,21 +163,10 @@ class _WellRecorder:
             return
 
         temp_output_path = self._output_path.with_name(f"temp_{self._output_path.name}")
-        ts_file_path = self._output_path.with_suffix(".timestamps.txt")
         
         try:
-            # 1. Create the timestamp file for ffmpeg (v2 format)
-            # This ensures each frame is placed at its exact real-world time.
-            with open(ts_file_path, "w") as f:
-                f.write("# timecode format v2\n")
-                current_ts_ms = 0.0
-                for interval in self._frame_intervals:
-                    current_ts_ms += interval
-                    f.write(f"{current_ts_ms:.2f}\n")
-
-            # 2. Build the ffmpeg filters
+            # 1. Build the ffmpeg filters
             # We use 'drawtext' with 'between(n, start_frame, end_frame)' for frame-accurate laser indicator.
-            # We NO LONGER use 'setpts' because we want the True Timeline (VFR).
             filter_parts = []
             
             on_start_frame = None
@@ -241,324 +188,140 @@ class _WellRecorder:
                     f"enable='gt(n,{on_start_frame})'"
                 )
 
-            # 3. Build the command
-            # We use the generated timestamp file to set the exact timing for every frame.
+            # 2. Build the command
+            # We specify the average FPS to give ffmpeg a baseline, 
+            # then use the visual filters to bake in the indicator.
+            fps_to_use = self._actual_fps if self._actual_fps > 0 else self._fps
+            
             command = [
                 "ffmpeg", "-y",
                 "-i", str(self._output_path),
-                "-fix_sub_duration", # helps with text overlays in VFR
             ]
             
             if filter_parts:
                 command += ["-vf", ",".join(filter_parts)]
             
-            # Use the timestamps file to define frame timing
-            # We also set a target average FPS for metadata purposes
-            fps_to_use = self._actual_fps if self._actual_fps > 0 else self._fps
+            # Use libx264 for high compatibility and quality
             command += [
                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23",
-                "-vsync", "vfr", # Variable Frame Rate mode
+                "-r", str(fps_to_use), # Sets constant output frame rate for simplicity in players
                 str(temp_output_path)
             ]
 
-            logger.info(f"[WellRecorder] Post-processing VFR {self._output_path} (Avg FPS: {fps_to_use:.2f})")
+            logger.info(f"[WellRecorder] Post-processing {self._output_path} (Avg FPS: {fps_to_use:.2f})")
             
             result = subprocess.run(command, check=True, capture_output=True, text=True)
             
-            # Apply the timestamps to the encoded file using mp4box or similar if needed,
-            # but modern ffmpeg with libx264 and VFR mode handles this well if we mux it correctly.
-            # For .avi to .mp4/mkv conversion with timestamps is more reliable.
-            # Let's stick to .mp4 for the processed output as it has better VFR support.
+            # The final file will be .mp4
             final_output_path = self._output_path.with_suffix(".mp4")
             os.replace(temp_output_path, final_output_path)
             
-            # Remove the original .avi and timestamp file to save space
+            # Remove the original .avi to save space
             if os.path.exists(self._output_path):
                 os.remove(self._output_path)
-            if os.path.exists(ts_file_path):
-                os.remove(ts_file_path)
                 
-            logger.info(f"[WellRecorder] VFR Post-processing complete: {final_output_path}")
+            logger.info(f"[WellRecorder] Post-processing complete: {final_output_path}")
             
         except Exception as e:
-            logger.error(f"[WellRecorder] VFR post-processing failed: {e}")
+            logger.error(f"[WellRecorder] Post-processing failed: {e}")
             if 'result' in locals():
                 logger.error(f"FFmpeg output: {result.stderr}")
 
-    def _fallback_fps_fix(self):
-        """Simple FPS header fix without re-encoding."""
-        temp_output_path = self._output_path.with_name(f"fallback_{self._output_path.name}")
-        command = [
-            "ffmpeg", "-y", "-i", str(self._output_path),
-            "-r", str(self._actual_fps), "-c", "copy", str(temp_output_path)
-        ]
-        try:
-            subprocess.run(command, check=True, capture_output=True)
-            os.replace(temp_output_path, self._output_path)
-            logger.info(f"[WellRecorder] Fallback FPS fix applied to {self._output_path}")
-        except Exception as e:
-            logger.error(f"[WellRecorder] Fallback FPS fix failed: {e}")
-
-
-# ---------------------------------------------------------------------------
-# Experiment engine
-# ---------------------------------------------------------------------------
-
-class Experiment:
-    """Manages the execution of a well-plate experiment."""
-
-    def __init__(
-        self,
-        hw_manager: HardwareManager,
-        well_plate: WellPlate,
-        params: Dict[str, Any],
-        on_status=None,
-        on_proxy_frame=None,
-    ):
-        self.hw_manager = hw_manager
-        self.well_plate = well_plate
+class Experiment(threading.Thread):
+    """Handles the execution of a multi-well experiment."""
+    
+    def __init__(self, params: dict, on_status=None, on_progress=None, on_frame=None):
+        super().__init__(daemon=True)
         self.params = params
-        self.is_running = False
+        self._on_status = on_status or (lambda x: None)
+        self._on_progress = on_progress or (lambda x, y: None)
+        self._on_frame = on_frame or (lambda x: None)
         self._stop_requested = False
-        # on_status(msg: str) — optional callback for UI status updates
-        self._on_status = on_status or (lambda msg: None)
-        self._on_proxy_frame = on_proxy_frame
-        self.output_dir = self._create_output_directory()
-
-    # ------------------------------------------------------------------
-    # Setup
-    # ------------------------------------------------------------------
-
-    def _create_output_directory(self) -> str:
-        base = Path(self.params.get("output_dir", "")) or (
-            Path.home() / "Documents" / "RoboCam" / "captures"
-        )
-        name = self.params.get("name", "experiment")
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        full = base / f"{ts}_{name}"
-        full.mkdir(parents=True, exist_ok=True)
-        logger.info(f"[Experiment] Output directory: {full}")
-        return str(full)
-
-    # ------------------------------------------------------------------
-    # Main run loop
-    # ------------------------------------------------------------------
-
+        
+    def stop(self):
+        self._stop_requested = True
+        
     def run(self):
-        if self.is_running:
-            logger.warning("[Experiment] Already running.")
-            return
-
-        self.is_running = True
-        self._stop_requested = False
-        mode = self.params.get("mode", MODE_VIDEO)
-        pattern = self.params.get("pattern", WellPlate.PATTERN_RASTER)
-        logger.info(
-            f"[Experiment] Starting '{self.params.get('name', 'Untitled')}' "
-            f"| mode={mode} | pattern={pattern}"
-        )
-
-        self._save_well_plate_csv()
-
-        motion    = self.hw_manager.get_motion_controller()
-        gpio      = self.hw_manager.get_gpio_controller()
-        camera    = self.hw_manager.get_camera()
-
-        laser_pin = (
-            self.hw_manager._config.get_section("gpio_controller").get("laser_pin")
-            or self.params.get("laser_pin", 21)
-        )
-        if not self.hw_manager.gpio_enabled:
-            logger.info("[Experiment] GPIO disabled — laser commands silently ignored.")
-
-        # Build the ordered well list respecting the selected subset
-        full_labeled = self.well_plate.get_path_with_labels()
-        selected  = self.params.get("selected_well_indices", None)
-        if selected is not None:
-            path_to_run = [(full_labeled[idx][0], full_labeled[idx][1])
-                           for idx in selected if idx < len(full_labeled)]
-        else:
-            path_to_run = full_labeled
-        logger.info(f"[Experiment] Visiting {len(path_to_run)} wells.")
-
-        total = len(path_to_run)
-        recorders = []
         try:
-            for well_num, (well_id, position) in enumerate(path_to_run):
+            self._on_status("Starting experiment...")
+            
+            output_dir = Path(self.params.get("output_dir", "captures"))
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            wells = self.params.get("wells", [])
+            total_wells = len(wells)
+            recorders = []
+            
+            for i, well_id in enumerate(wells):
                 if self._stop_requested:
-                    logger.info("[Experiment] Stop requested — halting.")
-                    self._on_status("Stopped.")
                     break
-
-                well_label = f"well_{well_id}"
-                move_msg = (
-                    f"[{well_num + 1}/{total}] Moving to {well_id} — "
-                    f"X:{position[0]:.2f} Y:{position[1]:.2f} Z:{position[2]:.2f}"
-                )
-                logger.info(move_msg)
-                self._on_status(move_msg)
-
-                motion.move_absolute(x=position[0], y=position[1], z=position[2])
-
-                if mode == MODE_VIDEO:
-                    recorder = self._run_video_well(well_label, camera, gpio, laser_pin, well_num + 1, total)
+                    
+                self._on_progress(i, total_wells)
+                self._on_status(f"Moving to well {well_id} ({i+1}/{total_wells})...")
+                
+                # Move to well
+                well_pos = self.params.get("well_positions", {}).get(well_id)
+                if well_pos:
+                    hw_manager.motion.move_to(well_pos['x'], well_pos['y'], well_pos['z'], wait=True)
+                
+                # Dwell
+                dwell = float(self.params.get("dwell", 0.5))
+                if dwell > 0:
+                    time.sleep(dwell)
+                
+                # Record
+                if self.params.get("mode") == "Video":
+                    recorder = self._run_video_well(well_id, output_dir)
                     if recorder:
                         recorders.append((well_id, recorder))
                 else:
-                    self._run_image_well(well_label, camera, well_num + 1, total)
-
-                time.sleep(float(self.params.get("post_well_delay", 0.0)))
-
-            # Perform batch post-processing after all wells are recorded
+                    self._run_image_well(well_id, output_dir)
+            
+            # Batch post-processing
             if recorders and not self._stop_requested:
                 should_post_process = self.params.get("post_process", True)
                 if should_post_process:
                     for i, (well_id, recorder) in enumerate(recorders):
-                        self._on_status(f"Post-processing videos ({i+1}/{len(recorders)}): {well_id}…")
+                        self._on_status(f"Post-processing videos ({i+1}/{len(recorders)}): {well_id}...")
                         recorder._post_process_video()
-                else:
-                    logger.info("[Experiment] Post-processing disabled — skipping.")
-
-        except Exception as e:
-            logger.error(f"[Experiment] Error during run: {e}", exc_info=True)
-            self._on_status(f"Error: {e}")
-        finally:
-            try:
-                gpio.write_pin(laser_pin, False)
-            except Exception:
-                pass
-            self.is_running = False
-            logger.info("[Experiment] Finished.")
-            self._on_status("Experiment finished.")
-
-    # ------------------------------------------------------------------
-    # Per-well handlers
-    # ------------------------------------------------------------------
-
-    def _sleep_check_stop(self, seconds: float):
-        """Sleep for N seconds but check for stop requests every 100ms."""
-        start = time.time()
-        while time.time() - start < seconds:
-            if self._stop_requested:
-                raise InterruptedError("Stop requested")
-            time.sleep(0.1)
-
-    def _run_video_well(self, label: str, camera, gpio, laser_pin: int,
-                         well_num: int = 0, total: int = 0):
-        """
-        Video capture sequence:
-            dwell (laser OFF)  →  laser ON  →  laser OFF
-            recording spans all three intervals.
-        """
-        dwell       = float(self.params.get("dwell",             0.5))
-        off_pre     = float(self.params.get("video_laser_off_pre",  2.0))
-        on_dur      = float(self.params.get("video_laser_on",       1.0))
-        off_post    = float(self.params.get("video_laser_off_post", 2.0))
-        gpio_enabled = self.hw_manager.gpio_enabled
-        well_id = label.replace("well_", "")
-        prefix = f"[{well_num}/{total}] " if total else ""
-
-        video_path = os.path.join(self.output_dir, f"{label}.avi")
-        recorder: Optional[_WellRecorder] = None
-
-        try:
-            # 1. Dwell — settle after move, laser off
-            self._on_status(f"{prefix}Arrived at {well_id} — settling ({dwell:.1f}s)")
-            self._sleep_check_stop(dwell)
-
-            # 2. Start recording
-            if camera.is_connected:
-                self._on_status(f"{prefix}Recording {well_id} (laser off — {off_pre:.1f}s)")
-                recorder = _WellRecorder(camera, self.hw_manager, video_path, on_proxy_frame=self._on_proxy_frame)
-                logger.info(f"[Experiment] Recording → {video_path}")
-            else:
-                logger.warning("[Experiment] Camera not connected — skipping recording.")
-                self._on_status(f"{prefix}Recording {well_id} — no camera")
-
-            # 3. Pre-laser record (laser OFF)
-            self._sleep_check_stop(off_pre)
-
-            # 4. Laser ON
-            if gpio_enabled:
-                gpio.write_pin(laser_pin, True)
-                if recorder:
-                    recorder.log_laser_event(True)
-                self._on_status(f"{prefix}Recording {well_id} (laser ON — {on_dur:.1f}s)")
-            self._sleep_check_stop(on_dur)
-
-            # 5. Laser OFF, post-laser record
-            if gpio_enabled:
-                gpio.write_pin(laser_pin, False)
-                if recorder:
-                    recorder.log_laser_event(False)
-                self._on_status(f"{prefix}Recording {well_id} (laser off — {off_post:.1f}s)")
-            self._sleep_check_stop(off_post)
-
-        except InterruptedError:
-            logger.info(f"[Experiment] Well {well_id} interrupted.")
-        except Exception as e:
-            logger.error(f"[Experiment] Error in well {well_id}: {e}")
-        finally:
-            try:
-                gpio.write_pin(laser_pin, False)
-            except Exception:
-                pass
-            if recorder:
-                recorder.stop()
-                recorder._thread.join(timeout=5.0)
-                self._on_status(f"{prefix}Saved {well_id}.avi")
             
-            return recorder
-
-    def _run_image_well(self, label: str, camera,
-                         well_num: int = 0, total: int = 0):
-        """
-        Capture a single frame at the current well position.
-        """
-        dwell = float(self.params.get("dwell", 0.5))
-        well_id = label.replace("well_", "")
-        prefix = f"[{well_num}/{total}] " if total else ""
-
-        img_path = os.path.join(self.output_dir, f"{label}.jpg")
-
-        try:
-            # 1. Dwell — settle after move
-            self._on_status(f"{prefix}Arrived at {well_id} — settling ({dwell:.1f}s)")
-            self._sleep_check_stop(dwell)
-
-            # 2. Capture
-            if camera.is_connected:
-                self._on_status(f"{prefix}Capturing {well_id}…")
-                frame = camera.read_frame()
-                if frame is not None:
-                    cv2.imwrite(img_path, frame)
-                    logger.info(f"[Experiment] Saved image → {img_path}")
-                    self._on_status(f"{prefix}Saved {well_id}.jpg")
-                else:
-                    logger.error(f"[Experiment] Could not read frame for {well_id}")
-                    self._on_status(f"{prefix}Capture failed for {well_id}")
-            else:
-                logger.warning("[Experiment] Camera not connected — skipping capture.")
-                self._on_status(f"{prefix}Capture skipped for {well_id}")
-
-        except InterruptedError:
-            logger.info(f"[Experiment] Well {well_id} interrupted.")
+            self._on_progress(total_wells, total_wells)
+            self._on_status("Experiment complete.")
+            
         except Exception as e:
-            logger.error(f"[Experiment] Error in well {well_id}: {e}")
+            logger.error(f"Experiment error: {e}", exc_info=True)
+            self._on_status(f"Error: {e}")
+            
+    def _run_video_well(self, well_id, output_dir):
+        well_path = output_dir / f"{well_id}.avi"
+        fps = float(self.params.get("video_fps", 30.0))
+        
+        recorder = _WellRecorder(
+            hw_manager.camera, hw_manager, str(well_path), 
+            fps=fps, on_proxy_frame=self._on_frame
+        )
+        
+        # Pre-laser
+        pre_time = float(self.params.get("video_laser_off_pre", 2.0))
+        time.sleep(pre_time)
+        
+        # Laser ON
+        on_time = float(self.params.get("video_laser_on", 1.0))
+        hw_manager.gpio.set_laser(True)
+        recorder.log_laser_event(True)
+        time.sleep(on_time)
+        
+        # Laser OFF
+        hw_manager.gpio.set_laser(False)
+        recorder.log_laser_event(False)
+        
+        # Post-laser
+        post_time = float(self.params.get("video_laser_off_post", 2.0))
+        time.sleep(post_time)
+        
+        recorder.stop()
+        return recorder
 
-    def _save_well_plate_csv(self):
-        """Saves the well coordinates and metadata to a CSV in the output dir."""
-        csv_path = os.path.join(self.output_dir, "well_plate_info.csv")
-        try:
-            with open(csv_path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(["Well ID", "X", "Y", "Z"])
-                for well_id, pos in self.well_plate.get_path_with_labels():
-                    writer.writerow([well_id, f"{pos[0]:.3f}", f"{pos[1]:.3f}", f"{pos[2]:.3f}"])
-            logger.info(f"[Experiment] Well plate CSV saved to {csv_path}")
-        except Exception as e:
-            logger.error(f"[Experiment] Failed to save CSV: {e}")
-
-    def stop(self):
-        """Request the experiment loop to stop."""
-        self._stop_requested = True
+    def _run_image_well(self, well_id, output_dir):
+        # Implementation for image capture mode
+        pass
