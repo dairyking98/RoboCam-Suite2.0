@@ -1017,11 +1017,13 @@ class SetupPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _refresh_status(self):
+        # 1. Printer
         try:
             _set_status(self.printer_status_lbl, self._hw.get_motion_controller().is_connected)
         except Exception:
             _set_status(self.printer_status_lbl, False)
 
+        # 2. Camera
         try:
             cam = self._hw.get_camera()
             was_connected = self.camera_status_lbl.text() == "Connected"
@@ -1035,6 +1037,14 @@ class SetupPanel(QWidget):
                 self._update_resolution_list()
         except Exception:
             _set_status(self.camera_status_lbl, False)
+
+        # 3. GPIO
+        gpio_enabled = self._hw.gpio_enabled
+        try:
+            gpio = self._hw.get_gpio_controller()
+            _set_status(self.gpio_status_lbl, gpio.is_connected, disabled=not gpio_enabled)
+        except Exception:
+            _set_status(self.gpio_status_lbl, False, disabled=not gpio_enabled)
 
     def _update_resolution_list(self):
         """Update the resolution dropdown based on the connected camera's capabilities."""
@@ -1058,13 +1068,6 @@ class SetupPanel(QWidget):
         idx = self.cam_res_combo.findData(current_res)
         if idx >= 0:
             self.cam_res_combo.setCurrentIndex(idx)
-
-        gpio_enabled = self._hw.gpio_enabled
-        try:
-            _set_status(self.gpio_status_lbl, self._hw.get_gpio_controller().is_connected,
-                        disabled=not gpio_enabled)
-        except Exception:
-            _set_status(self.gpio_status_lbl, False, disabled=not gpio_enabled)
 
     # ------------------------------------------------------------------
     # GPIO enable/disable toggle

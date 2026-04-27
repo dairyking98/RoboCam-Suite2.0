@@ -367,7 +367,11 @@ class Experiment:
                 motion.move_absolute(x=position[0], y=position[1], z=position[2])
 
                 if mode == MODE_VIDEO:
-                    self._run_video_well(well_label, camera, gpio, laser_pin, well_num + 1, total)
+                    recorder = self._run_video_well(well_label, camera, gpio, laser_pin, well_num + 1, total)
+                    # Process the video for the well we just finished before moving to the next
+                    if recorder:
+                        self._on_status(f"[{well_num + 1}/{total}] Post-processing {well_id}…")
+                        recorder._post_process_video()
                 else:
                     self._run_image_well(well_label, camera, well_num + 1, total)
 
@@ -460,6 +464,8 @@ class Experiment:
                 recorder.stop()
                 recorder._thread.join(timeout=5.0)
                 self._on_status(f"{prefix}Saved {well_id}.avi")
+            
+            return recorder
 
     def _run_image_well(self, label: str, camera,
                          well_num: int = 0, total: int = 0):
