@@ -775,12 +775,13 @@ class ExperimentPanel(QWidget):
             well_positions = {}
             well_list = []
             
-            # Map selected indices to well IDs and positions
-            # We assume selected_indices are (row, col) tuples from WellSelection
-            for r, c in selected_indices:
+            # Map selected flat indices to well IDs and positions
+            # selected_indices are flat indices (0 to N*M-1)
+            for idx in selected_indices:
+                r, c = divmod(idx, cols)
                 well_id = f"{chr(65+r)}{c+1}"
                 well_list.append(well_id)
-                pos = well_plate.get_well_position(r, c)
+                pos = well_plate._interpolate(r, c)
                 well_positions[well_id] = {"x": pos[0], "y": pos[1], "z": pos[2]}
             
             # Handle Scan Pattern (Raster vs Snake)
@@ -788,7 +789,11 @@ class ExperimentPanel(QWidget):
                 # Sort by row, then by col (alternate direction)
                 well_list = []
                 for r in range(rows):
-                    row_wells = [f"{chr(65+r)}{c+1}" for c in range(cols) if (r, c) in selected_indices]
+                    row_wells = []
+                    for c in range(cols):
+                        idx = r * cols + c
+                        if idx in selected_indices:
+                            row_wells.append(f"{chr(65+r)}{c+1}")
                     if r % 2 == 1:
                         row_wells.reverse()
                     well_list.extend(row_wells)
