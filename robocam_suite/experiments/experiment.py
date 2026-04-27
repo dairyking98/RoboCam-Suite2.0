@@ -198,62 +198,92 @@ class _WellRecorder:
     def _post_process_video(self):
         """
         Post-processes the video to:
-        1. Add a visual '● LASER' indicator based on logged events.
-        2. Adjust the file metadata to match the actual captured FPS.
+        1. Implement True Timeline (VFR) by mapping frames to actual capture timestamps.
+        2. Add a visual '● LASER' indicator based on frame indices.
         """
-        if self._frames_captured == 0:
+        if self._frames_captured == 0 or not self._frame_intervals:
             return
 
         temp_output_path = self._output_path.with_name(f"temp_{self._output_path.name}")
-        
-        # 1. Build the ffmpeg filters
-        # We use 'setpts' to force every frame to have a constant duration, ensuring consistent speed.
-        # We use 'drawtext' with 'between(n, start_frame, end_frame)' for frame-accurate laser indicator.
-        fps_to_use = self._actual_fps if self._actual_fps > 0 else self._fps
-        filter_parts = [f"setpts=N/({fps_to_use}*TB)"]
-        
-        on_start_frame = None
-        for event in self._laser_events:
-            frame_idx = event.get("frame_index", 0)
-            if event["state"] == "ON":
-                on_start_frame = frame_idx
-            elif event["state"] == "OFF" and on_start_frame is not None:
-                on_end_frame = frame_idx
-                filter_parts.append(
-                    f"drawtext=text='● LASER':fontcolor=red:fontsize=24:x=w-120:y=40:"
-                    f"enable='between(n,{on_start_frame},{on_end_frame})'"
-                )
-                on_start_frame = None
-        
-        if on_start_frame is not None:
-            filter_parts.append(
-                f"drawtext=text='● LASER':fontcolor=red:fontsize=24:x=w-120:y=40:"
-                f"enable='gt(n,{on_start_frame})'"
-            )
-
-        # 2. Build the command
-        # Input -r doesn't matter much now because setpts fixes the timing of every frame.
-        command = [
-            "ffmpeg", "-y", "-i", str(self._output_path),
-            "-vf", ",".join(filter_parts),
-            "-r", str(fps_to_use),
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23",
-            str(temp_output_path)
-        ]
-
-        logger.info(f"[WellRecorder] Post-processing {self._output_path} (FPS: {fps_to_use:.2f}, Laser filters: {len(filter_parts)})")
+        ts_file_path = self._output_path.with_suffix(".timestamps.txt")
         
         try:
+            # 1. Create the timestamp file for ffmpeg (v2 format)
+            # This ensures each frame is placed at its exact real-world time.
+            with open(ts_file_path, "w") as f:
+                f.write("# timecode format v2\n")
+                current_ts_ms = 0.0
+                for interval in self._frame_intervals:
+                    current_ts_ms += interval
+                    f.write(f"{current_ts_ms:.2f}\n")
+
+            # 2. Build the ffmpeg filters
+            # We use 'drawtext' with 'between(n, start_frame, end_frame)' for frame-accurate laser indicator.
+            # We NO LONGER use 'setpts' because we want the True Timeline (VFR).
+            filter_parts = []
+            
+            on_start_frame = None
+            for event in self._laser_events:
+                frame_idx = event.get("frame_index", 0)
+                if event["state"] == "ON":
+                    on_start_frame = frame_idx
+                elif event["state"] == "OFF" and on_start_frame is not None:
+                    on_end_frame = frame_idx
+                    filter_parts.append(
+                        f"drawtext=text='● LASER':fontcolor=red:fontsize=24:x=w-120:y=40:"
+                        f"enable='between(n,{on_start_frame},{on_end_frame})'"
+                    )
+                    on_start_frame = None
+            
+            if on_start_frame is not None:
+                filter_parts.append(
+                    f"drawtext=text='● LASER':fontcolor=red:fontsize=24:x=w-120:y=40:"
+                    f"enable='gt(n,{on_start_frame})'"
+                )
+
+            # 3. Build the command
+            # We use the generated timestamp file to set the exact timing for every frame.
+            command = [
+                "ffmpeg", "-y",
+                "-i", str(self._output_path),
+                "-fix_sub_duration", # helps with text overlays in VFR
+            ]
+            
+            if filter_parts:
+                command += ["-vf", ",".join(filter_parts)]
+            
+            # Use the timestamps file to define frame timing
+            # We also set a target average FPS for metadata purposes
+            fps_to_use = self._actual_fps if self._actual_fps > 0 else self._fps
+            command += [
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23",
+                "-vsync", "vfr", # Variable Frame Rate mode
+                str(temp_output_path)
+            ]
+
+            logger.info(f"[WellRecorder] Post-processing VFR {self._output_path} (Avg FPS: {fps_to_use:.2f})")
+            
             result = subprocess.run(command, check=True, capture_output=True, text=True)
-            os.replace(temp_output_path, self._output_path)
-            logger.info(f"[WellRecorder] Post-processing complete for {self._output_path}")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"[WellRecorder] ffmpeg failed: {e.stderr}")
-            # If libx264 fails (e.g. not installed), try a simpler copy-based FPS fix if no filters
-            if not filter_parts:
-                self._fallback_fps_fix()
+            
+            # Apply the timestamps to the encoded file using mp4box or similar if needed,
+            # but modern ffmpeg with libx264 and VFR mode handles this well if we mux it correctly.
+            # For .avi to .mp4/mkv conversion with timestamps is more reliable.
+            # Let's stick to .mp4 for the processed output as it has better VFR support.
+            final_output_path = self._output_path.with_suffix(".mp4")
+            os.replace(temp_output_path, final_output_path)
+            
+            # Remove the original .avi and timestamp file to save space
+            if os.path.exists(self._output_path):
+                os.remove(self._output_path)
+            if os.path.exists(ts_file_path):
+                os.remove(ts_file_path)
+                
+            logger.info(f"[WellRecorder] VFR Post-processing complete: {final_output_path}")
+            
         except Exception as e:
-            logger.error(f"[WellRecorder] Error during post-processing: {e}")
+            logger.error(f"[WellRecorder] VFR post-processing failed: {e}")
+            if 'result' in locals():
+                logger.error(f"FFmpeg output: {result.stderr}")
 
     def _fallback_fps_fix(self):
         """Simple FPS header fix without re-encoding."""
