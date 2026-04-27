@@ -169,6 +169,15 @@ class _WellRecorder:
             # We use 'drawtext' with 'between(n, start_frame, end_frame)' for frame-accurate laser indicator.
             filter_parts = []
             
+            # Common font paths for RPi/Linux (FFmpeg needs an explicit font path if not configured)
+            font_paths = [
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+            ]
+            font_path = next((p for p in font_paths if os.path.exists(p)), None)
+            font_arg = f":fontfile='{font_path}'" if font_path else ""
+
             on_start_frame = None
             for event in self._laser_events:
                 frame_idx = event.get("frame_index", 0)
@@ -177,14 +186,14 @@ class _WellRecorder:
                 elif event["state"] == "OFF" and on_start_frame is not None:
                     on_end_frame = frame_idx
                     filter_parts.append(
-                        f"drawtext=text='● LASER':fontcolor=red:fontsize=24:x=w-120:y=40:"
+                        f"drawtext=text='● LASER'{font_arg}:fontcolor=red:fontsize=32:x=w-150:y=50:"
                         f"enable='between(n,{on_start_frame},{on_end_frame})'"
                     )
                     on_start_frame = None
             
             if on_start_frame is not None:
                 filter_parts.append(
-                    f"drawtext=text='● LASER':fontcolor=red:fontsize=24:x=w-120:y=40:"
+                    f"drawtext=text='● LASER'{font_arg}:fontcolor=red:fontsize=32:x=w-150:y=50:"
                     f"enable='gt(n,{on_start_frame})'"
                 )
 

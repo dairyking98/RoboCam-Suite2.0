@@ -545,7 +545,7 @@ class ExperimentPanel(QWidget):
         # Video Format Selection
         layout.addWidget(QLabel("Video Format:"), last_row + 1, 0)
         self.video_format_combo = QComboBox()
-        self.video_format_combo.addItems(["MP4 (Scientific VFR)", "AVI (Raw MJPG)"])
+        self.video_format_combo.addItems(["AVI (Raw MJPG)", "MP4 (Scientific VFR)"])
         self.video_format_combo.setToolTip(
             "MP4 (Scientific VFR) — Recommended for experiments.\n"
             "Uses per-frame timestamps to ensure absolute temporal accuracy.\n"

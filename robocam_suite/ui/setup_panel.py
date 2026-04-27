@@ -387,18 +387,7 @@ class SetupPanel(QWidget):
         )
         layout.addWidget(self.img_format_combo, 2, 1, 1, 2)
 
-        # Video format
-        layout.addWidget(QLabel("Video format:"), 3, 0)
-        self.vid_format_combo = QComboBox()
-        for fmt in ["AVI (MJPG)", "AVI (XVID)", "MP4 (avc1)"]:
-            self.vid_format_combo.addItem(fmt)
-        self.vid_format_combo.setToolTip(
-            "Container and codec for recorded video (Quick Capture and Video Capture mode).\n"
-            "AVI (MJPG) \u2014 best cross-platform compatibility.\n"
-            "AVI (XVID) \u2014 good compression, widely supported.\n"
-            "MP4 (avc1) \u2014 H.264, smallest files; requires compatible OpenCV build."
-        )
-        layout.addWidget(self.vid_format_combo, 3, 1, 1, 2)
+        # Video format (managed in Calibration/Experiment tabs)
 
         # Resolution
         layout.addWidget(QLabel("Resolution:"), 4, 0)
