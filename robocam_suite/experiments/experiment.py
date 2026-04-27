@@ -408,6 +408,7 @@ class Experiment:
                 pass
             if recorder:
                 recorder.stop()
+                recorder._thread.join(timeout=5.0)
                 self._on_status(f"{prefix}Saved {well_id}.avi")
 
     def _run_image_well(self, label: str, camera,
