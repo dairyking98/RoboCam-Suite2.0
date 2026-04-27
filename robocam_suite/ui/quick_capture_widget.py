@@ -388,7 +388,7 @@ class QuickCaptureWidget(QGroupBox):
         self._session.update_session("quick_capture", {"video_format": self.video_format_combo.currentText()})
 
     def _load_from_session(self):
-        s = self._session.get_session("quick_capture", {})
+        s = self._session.get_session("quick_capture")
         fmt = s.get("video_format")
         if fmt:
             idx = self.video_format_combo.findText(fmt)
