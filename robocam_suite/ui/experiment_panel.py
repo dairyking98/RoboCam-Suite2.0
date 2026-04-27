@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QGridLayout, QLabel, QLineEdit, QGroupBox,
     QComboBox, QFileDialog, QMessageBox,
     QScrollArea, QSplitter, QStackedWidget,
+    QCheckBox,
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor
@@ -531,6 +532,7 @@ class ExperimentPanel(QWidget):
             ),
         ]
         self._video_inputs: dict[str, QLineEdit] = {}
+        last_row = 0
         for i, (key, default, label, tip) in enumerate(rows):
             layout.addWidget(QLabel(label), i, 0)
             edit = QLineEdit(default)
@@ -538,6 +540,19 @@ class ExperimentPanel(QWidget):
             edit.textChanged.connect(self._autosave)
             layout.addWidget(edit, i, 1)
             self._video_inputs[key] = edit
+            last_row = i
+
+        # Post-processing toggle
+        self.post_process_check = QCheckBox("Post-process Videos (Fix FPS & Laser Indicator)")
+        self.post_process_check.setChecked(True)
+        self.post_process_check.setToolTip(
+            "If enabled, the system will automatically process the recorded videos after the experiment to:\n"
+            "  1. Bake in a visual '● LASER' indicator based on metadata.\n"
+            "  2. Correct the playback FPS to match the actual recorded rate.\n\n"
+            "Uncheck this if you prefer to keep the raw, unmodified .avi files."
+        )
+        self.post_process_check.toggled.connect(self._autosave)
+        layout.addWidget(self.post_process_check, last_row + 1, 0, 1, 2)
 
         return self._video_grp
 
@@ -795,6 +810,7 @@ class ExperimentPanel(QWidget):
             "dwell":        self.dwell_input.text(),
             "image_format": self.image_format_combo.currentText(),
             "output_dir":   str(self._get_output_dir()),
+            "post_process": self.post_process_check.isChecked(),
         }
         for k, edit in self._video_inputs.items():
             d[f"video_{k}"] = edit.text()
@@ -818,6 +834,7 @@ class ExperimentPanel(QWidget):
         for k, edit in self._video_inputs.items():
             if f"video_{k}" in d:
                 edit.setText(str(d[f"video_{k}"]))
+        self.post_process_check.setChecked(d.get("post_process", True))
 
     def _choose_preset_folder(self):
         """Let the user pick a different preset folder."""

@@ -381,9 +381,13 @@ class Experiment:
 
             # Perform batch post-processing after all wells are recorded
             if recorders and not self._stop_requested:
-                for i, (well_id, recorder) in enumerate(recorders):
-                    self._on_status(f"Post-processing videos ({i+1}/{len(recorders)}): {well_id}…")
-                    recorder._post_process_video()
+                should_post_process = self.params.get("post_process", True)
+                if should_post_process:
+                    for i, (well_id, recorder) in enumerate(recorders):
+                        self._on_status(f"Post-processing videos ({i+1}/{len(recorders)}): {well_id}…")
+                        recorder._post_process_video()
+                else:
+                    logger.info("[Experiment] Post-processing disabled — skipping.")
 
         except Exception as e:
             logger.error(f"[Experiment] Error during run: {e}", exc_info=True)
