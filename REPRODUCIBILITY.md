@@ -305,3 +305,102 @@ Corrected the call to retrieve `"last_calibration_path"` by first getting the `"
 1.  Start the application. Verify that it launches without `AttributeError`.
 2.  Save a calibration file. Verify that the `last_calibration_path` is correctly saved in the session.
 3.  Restart the application. Verify that the last saved calibration is automatically loaded.
+
+## 25. Fix SessionManager AttributeError (Attempt 3)
+
+**Problem:**
+The `AttributeError: 'SessionManager' object has no attribute 'get'` persisted despite previous attempts to fix it. The `session_manager` does not have a top-level `get` method, but rather `get_session` to retrieve a section, and then `get` on that section.
+
+**Solution:**
+Modified `_load_from_session` in `calibration_panel.py` to correctly retrieve `"last_calibration_path"` by calling `session_manager.get_session("calibration").get("last_calibration_path")`. This directly accesses the nested key within the correct session section.
+
+**Verification:**
+1.  Start the application. Verify that it launches successfully without any `AttributeError`.
+2.  Proceed with the verifications for Homing Enforcement, Automatic Calibration Loading, and Laser ON Asterisk Indicator as described in previous sections.
+
+## 26. Fix AttributeError: 'CalibrationPanel' object has no attribute 'status_label'
+
+**Problem:**
+An `AttributeError: 'CalibrationPanel' object has no attribute 'status_label'` occurred because the code was attempting to access `self.status_label` instead of the correctly named `self._cal_status_label`.
+
+**Solution:**
+Replaced all instances of `self.status_label` with `self._cal_status_label` in `calibration_panel.py` to correctly reference the status label widget.
+
+**Verification:**
+1.  Start the application. Verify that it launches successfully without any `AttributeError`.
+2.  Proceed with the verifications for Homing Enforcement, Automatic Calibration Loading, and Laser ON Asterisk Indicator as described in previous sections.
+
+## 27. Fix TypeError in _load_calibration due to boolean path
+
+**Problem:**
+A `TypeError: argument should be a str or an os.PathLike object where __fspath__ returns a str, not 'bool'` occurred in `_load_calibration` because `session_manager` was storing `False` as the `last_calibration_path` when a user cancelled the file dialog, and this boolean `False` was then passed to `Path()` on subsequent startups.
+
+**Solution:**
+1.  Modified `_load_calibration` to store `None` instead of `False` in `session_manager` when the user cancels the file dialog, ensuring `last_calibration_path` is always either a valid path string or `None`.
+2.  Added a check in `_load_from_session` to ensure `last_cal_path` is not `None` or the string `"None"` before attempting to convert it to a `Path` object.
+3.  Corrected a syntax error in `_load_calibration` where `cal_dir` was not properly assigned.
+
+**Verification:**
+1.  Start the application. Verify that it launches successfully without any `TypeError`.
+2.  Try to load a calibration file and cancel the dialog. Close and restart the application. Verify that no error occurs and no calibration is loaded automatically.
+3.  Proceed with the verifications for Homing Enforcement, Automatic Calibration Loading, and Laser ON Asterisk Indicator as described in previous sections.
+
+## 28. Fix SyntaxError in _load_calibration
+
+**Problem:**
+A `SyntaxError: invalid syntax` occurred in `_load_calibration` at line 975 due to incorrect placement of the `else` keyword.
+
+**Solution:**
+Corrected the placement of the `else` keyword in `_load_calibration` to ensure proper Python syntax.
+
+**Verification:**
+1.  Start the application. Verify that it launches successfully without any `SyntaxError`.
+2.  Proceed with the verifications for Homing Enforcement, Automatic Calibration Loading, and Laser ON Asterisk Indicator as described in previous sections.
+
+## 29. Fix IndentationError in _load_calibration (Attempt 3)
+
+**Problem:**
+Another `IndentationError: expected an indented block after 'else' statement` occurred in `_load_calibration` at line 978, indicating persistent incorrect indentation within the `else` block.
+
+**Solution:**
+Corrected the indentation of the `path = Path(path)` line to be properly nested within the `else` statement.
+
+**Verification:**
+1.  Start the application. Verify that it launches successfully without any `IndentationError`.
+2.  Proceed with the verifications for Homing Enforcement, Automatic Calibration Loading, and Laser ON Asterisk Indicator as described in previous sections.
+
+## 30. Fix SyntaxError in _load_calibration (Attempt 4 - Complete Rewrite)
+
+**Problem:**
+Persistent `SyntaxError` and logical issues within the `_load_calibration` method, specifically related to the `else` statement and handling of the `path` argument.
+
+**Solution:**
+Completely rewrote the `_load_calibration` method to ensure correct syntax, proper handling of the `path` argument (converting to `Path` object only when valid), and consistent logic for saving `None` to `session_manager` when a file dialog is cancelled.
+
+**Verification:**
+1.  Start the application. Verify that it launches successfully without any `SyntaxError`.
+2.  Proceed with the verifications for Homing Enforcement, Automatic Calibration Loading, and Laser ON Asterisk Indicator as described in previous sections.
+
+## 31. Fix IndentationError at start of calibration_panel.py
+
+**Problem:**
+An `IndentationError: unexpected indent` occurred at the very first line of `calibration_panel.py`, preventing the application from launching. This was due to incorrect top-level indentation.
+
+**Solution:**
+Corrected the indentation of the entire `calibration_panel.py` file, ensuring no leading whitespace on the first line and proper nesting of all code blocks.
+
+**Verification:**
+1.  Start the application. Verify that it launches successfully without any `IndentationError`.
+2.  Proceed with the verifications for Homing Enforcement, Automatic Calibration Loading, and Laser ON Asterisk Indicator as described in previous sections.
+
+## 32. Fix ImportError: cannot import name 'session_manager'
+
+**Problem:**
+An `ImportError` occurred because `session_manager` was being imported from `robocam_suite.config.config_manager` instead of `robocam_suite.session_manager`.
+
+**Solution:**
+Corrected the import statement in `calibration_panel.py` to import `session_manager` from its correct module: `from robocam_suite.session_manager import session_manager`.
+
+**Verification:**
+1.  Start the application. Verify that it launches successfully without any `ImportError`.
+2.  Proceed with the verifications for Homing Enforcement, Automatic Calibration Loading, and Laser ON Asterisk Indicator as described in previous sections.
