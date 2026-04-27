@@ -139,7 +139,7 @@ class _WellRecorder:
             self._actual_fps = self._frames_captured / duration if duration > 0 else 0.0
             self._save_metadata()
             logger.info(f"[WellRecorder] Saved {self._output_path} ({self._frames_captured} frames, actual FPS: {self._actual_fps:.2f})")
-            self._post_process_video_fps()
+            self._post_process_video()
 
     def _emit_proxy(self, frame):
         """Convert BGR frame to QImage and call the proxy callback."""
@@ -185,29 +185,86 @@ class _WellRecorder:
     def stop(self):
         self._stop_event.set()
 
-    def _post_process_video_fps(self):
-        """Rewrites the video file with the actual FPS using ffmpeg."""
-        if self._actual_fps == 0 or self._actual_fps == self._fps:
-            logger.info(f"[WellRecorder] No FPS adjustment needed for {self._output_path}.")
+    def _post_process_video(self):
+        """
+        Post-processes the video to:
+        1. Add a visual '● LASER' indicator based on logged events.
+        2. Adjust the file metadata to match the actual captured FPS.
+        """
+        if self._frames_captured == 0:
             return
 
         temp_output_path = self._output_path.with_name(f"temp_{self._output_path.name}")
+        
+        # 1. Build the ffmpeg filter for the laser indicator
+        # We use 'drawtext' to show a red dot and 'LASER' text during ON intervals.
+        # Intervals are [time_offset_on, time_offset_off].
+        filter_parts = []
+        on_start = None
+        
+        for event in self._laser_events:
+            if event["state"] == "ON":
+                on_start = event["time_offset"]
+            elif event["state"] == "OFF" and on_start is not None:
+                on_end = event["time_offset"]
+                # Add a red circle and text
+                # circle: \u25CF (UTF-8 circle)
+                filter_parts.append(
+                    f"drawtext=text='● LASER':fontcolor=red:fontsize=24:x=w-120:y=40:"
+                    f"enable='between(t,{on_start},{on_end})'"
+                )
+                on_start = None
+        
+        # If still ON at the end of recording
+        if on_start is not None:
+            filter_parts.append(
+                f"drawtext=text='● LASER':fontcolor=red:fontsize=24:x=w-120:y=40:"
+                f"enable='gt(t,{on_start})'"
+            )
+
+        # 2. Build the command
+        command = ["ffmpeg", "-y", "-i", str(self._output_path)]
+        
+        if filter_parts:
+            # Join filters with commas
+            video_filter = ",".join(filter_parts)
+            command += ["-vf", video_filter]
+        
+        # Set the output FPS to the actual measured FPS
+        fps_to_use = self._actual_fps if self._actual_fps > 0 else self._fps
+        command += ["-r", str(fps_to_use)]
+        
+        # Re-encode to ensure filters are applied and FPS is baked in
+        # We use libx264 for better compatibility if available, else mpeg4
+        command += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23", str(temp_output_path)]
+
+        logger.info(f"[WellRecorder] Post-processing {self._output_path} (FPS: {fps_to_use:.2f}, Laser filters: {len(filter_parts)})")
+        
+        try:
+            result = subprocess.run(command, check=True, capture_output=True, text=True)
+            os.replace(temp_output_path, self._output_path)
+            logger.info(f"[WellRecorder] Post-processing complete for {self._output_path}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"[WellRecorder] ffmpeg failed: {e.stderr}")
+            # If libx264 fails (e.g. not installed), try a simpler copy-based FPS fix if no filters
+            if not filter_parts:
+                self._fallback_fps_fix()
+        except Exception as e:
+            logger.error(f"[WellRecorder] Error during post-processing: {e}")
+
+    def _fallback_fps_fix(self):
+        """Simple FPS header fix without re-encoding."""
+        temp_output_path = self._output_path.with_name(f"fallback_{self._output_path.name}")
         command = [
-            "ffmpeg",
-            "-i", str(self._output_path),
-            "-r", str(self._actual_fps),
-            "-c", "copy",
-            str(temp_output_path)
+            "ffmpeg", "-y", "-i", str(self._output_path),
+            "-r", str(self._actual_fps), "-c", "copy", str(temp_output_path)
         ]
-        logger.info(f"[WellRecorder] Adjusting FPS for {self._output_path} to {self._actual_fps:.2f} using ffmpeg.")
         try:
             subprocess.run(command, check=True, capture_output=True)
             os.replace(temp_output_path, self._output_path)
-            logger.info(f"[WellRecorder] Successfully adjusted FPS for {self._output_path}.")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"[WellRecorder] ffmpeg failed for {self._output_path}: {e.stderr.decode()}")
+            logger.info(f"[WellRecorder] Fallback FPS fix applied to {self._output_path}")
         except Exception as e:
-            logger.error(f"[WellRecorder] Error during FPS adjustment for {self._output_path}: {e}")
+            logger.error(f"[WellRecorder] Fallback FPS fix failed: {e}")
 
 
 # ---------------------------------------------------------------------------
