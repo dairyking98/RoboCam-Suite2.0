@@ -3,31 +3,81 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PyQt5.QtCore import pyqtSignal, QTimer
-from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox, QGroupBox, QRadioButton, QButtonGroup, QFileDialog, QMessageBox, QComboBox)
+from PySide6.QtCore import QTimer, Qt, Signal
+from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox, QGroupBox, QRadioButton, QButtonGroup, QFileDialog, QMessageBox, QComboBox, QCheckBox)
+from PySide6.QtGui import QPainter, QColor
 from robocam_suite.session_manager import session_manager
-from robocam_suite.config.default_config import _default_cal_dir
-from robocam_suite.hw_manager import HWManager
-from robocam_suite.ui.well_map_widget import WellMapWidget
+
+# from robocam_suite.ui.well_map_widget import WellMapWidget
 
 logger = logging.getLogger(__name__)
 
-CORNER_NAMES = ["top_left", "top_right", "bottom_left", "bottom_right"]
+from robocam_suite.ui.well_grid import WellGrid
+
+class WellMapWidget(QWidget):
+    well_clicked = Signal(float, float, float)
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.grid = WellGrid(mode=WellGrid.Mode.NAVIGATE)
+        self.grid.well_clicked.connect(self._on_grid_clicked)
+        self.layout.addWidget(self.grid)
+        
+        self._rows = 0
+        self._cols = 0
+        self._tl = None
+        self._tr = None
+        self._bl = None
+        self._br = None
+
+    def set_well_grid(self, rows, cols, tl, tr, bl, br):
+        self._rows = rows
+        self._cols = cols
+        self._tl = tl
+        self._tr = tr
+        self._bl = bl
+        self._br = br
+        self.grid.rebuild(rows, cols)
+
+    def clear(self):
+        self._rows = 0
+        self._cols = 0
+        self.grid.rebuild(0, 0)
+
+    def _on_grid_clicked(self, r, c):
+        if self._rows <= 0 or self._cols <= 0 or not self._tl:
+            return
+            
+        # Bilinear interpolation
+        u = c / (self._cols - 1) if self._cols > 1 else 0.5
+        v = r / (self._rows - 1) if self._rows > 1 else 0.5
+        
+        x = (1-u)*(1-v)*self._tl[0] + u*(1-v)*self._tr[0] + (1-u)*v*self._bl[0] + u*v*self._br[0]
+        y = (1-u)*(1-v)*self._tl[1] + u*(1-v)*self._tr[1] + (1-u)*v*self._bl[1] + u*v*self._br[1]
+        z = (1-u)*(1-v)*self._tl[2] + u*(1-v)*self._tr[2] + (1-u)*v*self._bl[2] + u*v*self._br[2]
+        
+        self.well_clicked.emit(x, y, z)
+
+CORNER_NAMES = ["Upper-Left", "Upper-Right", "Lower-Left", "Lower-Right"]
 STEP_PRESETS = ["0.1", "1.0", "10.0", "100.0"]
 
 class CalibrationPanel(QWidget):
-    corners_changed = pyqtSignal()
+    corners_changed = Signal()
 
-    def __init__(self, hw_manager: HWManager, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
+        from robocam_suite.hw_manager import hw_manager
         self.hw_manager = hw_manager
         self._is_homed = False
 
         self.corners = {
-            "top_left": {"position": None, "label": QLabel("Not Set")},
-            "top_right": {"position": None, "label": QLabel("Not Set")},
-            "bottom_left": {"position": None, "label": QLabel("Not Set")},
-            "bottom_right": {"position": None, "label": QLabel("Not Set")},
+            "Upper-Left": {"position": None, "label": QLabel("Not Set")},
+            "Upper-Right": {"position": None, "label": QLabel("Not Set")},
+            "Lower-Left": {"position": None, "label": QLabel("Not Set")},
+            "Lower-Right": {"position": None, "label": QLabel("Not Set")},
         }
 
         self.init_ui()
@@ -291,6 +341,7 @@ class CalibrationPanel(QWidget):
         layout.addLayout(grid_layout)
 
         self.well_map_widget = WellMapWidget()
+        # Connection moved to MainWindow or connected here
         self.well_map_widget.well_clicked.connect(self._on_well_map_clicked)
         layout.addWidget(self.well_map_widget)
 
@@ -315,18 +366,20 @@ class CalibrationPanel(QWidget):
         return group
 
     def _generate_well_map(self):
+        # Update the well map widget with current corners and dimensions
         corners_set = all(c["position"] is not None for c in self.corners.values())
         if corners_set:
             self.well_map_widget.set_well_grid(
-                self.rows_spin.value(),
-                self.cols_spin.value(),
-                self.corners["top_left"]["position"],
-                self.corners["top_right"]["position"],
-                self.corners["bottom_left"]["position"],
-                self.corners["bottom_right"]["position"],
+                int(self.rows_spin.value()),
+                int(self.cols_spin.value()),
+                self.corners["Upper-Left"]["position"],
+                self.corners["Upper-Right"]["position"],
+                self.corners["Lower-Left"]["position"],
+                self.corners["Lower-Right"]["position"],
             )
         else:
             self.well_map_widget.clear()
+        self.corners_changed.emit()
 
     def _persist_corners(self):
         corners_data = {
@@ -422,6 +475,28 @@ class CalibrationPanel(QWidget):
     def get_well_positions(self) -> Optional[list]:
         return self._compute_well_positions()
 
+    def _compute_well_positions(self) -> Optional[list]:
+        corners_set = all(c["position"] is not None for c in self.corners.values())
+        if not corners_set:
+            return None
+        # Simplified bilinear interpolation for well positions
+        tl = self.corners["Upper-Left"]["position"]
+        tr = self.corners["Upper-Right"]["position"]
+        bl = self.corners["Lower-Left"]["position"]
+        br = self.corners["Lower-Right"]["position"]
+        rows = int(self.rows_spin.value())
+        cols = int(self.cols_spin.value())
+        positions = []
+        for r in range(rows):
+            for c in range(cols):
+                u = c / (cols - 1) if cols > 1 else 0.5
+                v = r / (rows - 1) if rows > 1 else 0.5
+                x = (1-u)*(1-v)*tl[0] + u*(1-v)*tr[0] + (1-u)*v*bl[0] + u*v*br[0]
+                y = (1-u)*(1-v)*tl[1] + u*(1-v)*tr[1] + (1-u)*v*bl[1] + u*v*br[1]
+                z = (1-u)*(1-v)*tl[2] + u*(1-v)*tr[2] + (1-u)*v*bl[2] + u*v*br[2]
+                positions.append((x, y, z))
+        return positions
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -430,16 +505,16 @@ class CalibrationPanel(QWidget):
         """Preset radio clicked — keep custom input visible."""
         if btn is not self._custom_rb:
             # Preset selected - DONT change the input box so the user can still see their custom value
-            self._session.update_session("calibration", {"step_size": btn.text()})
+            session_manager.update_session("calibration", {"step_size": btn.text()})
         else:
             # Re-selected "Custom"
-            self._session.update_session("calibration", {"step_size": self.step_size_input.text()})
+            session_manager.update_session("calibration", {"step_size": str(self.step_size_input.value())})
 
     def _on_custom_step_edited(self, text: str):
         """User typed in the custom field — auto-select the Custom radio button."""
         self._last_custom_step = text
         self._custom_rb.setChecked(True)
-        self._session.update_session("calibration", {
+        session_manager.update_session("calibration", {
             "step_size": text,
             "custom_step_size": text
         })
@@ -453,12 +528,14 @@ class CalibrationPanel(QWidget):
             self.z_pos_label.setText(f"{pos[2]:.2f}")
 
             # Update homing status
-            if mc.is_homed():
-                self._is_homed = True
-                self._cal_status_label.setText("Ready.")
-                self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
-                self._set_movement_controls_enabled(True)
-                self._set_camera_controls_enabled(True)
+            is_homed = mc.is_homed()
+            if is_homed:
+                if not self._is_homed:
+                    self._is_homed = True
+                    self._cal_status_label.setText("Ready.")
+                    self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
+                    self._set_movement_controls_enabled(True)
+                    self._set_camera_controls_enabled(True)
             else:
                 self._is_homed = False
                 self._cal_status_label.setText("<b style=\"color: red;\">Printer Not Homed.</b>")
@@ -485,11 +562,11 @@ class CalibrationPanel(QWidget):
         self.z_minus_btn.setEnabled(enabled)
         self.home_btn.setEnabled(True) # Always allow homing
         self.go_to_xyz_btn.setEnabled(enabled)
-        self.set_corner_btn.setEnabled(enabled)
-        self.clear_corners_btn.setEnabled(enabled)
-        self.load_cal_btn.setEnabled(enabled)
-        self.save_cal_btn.setEnabled(enabled)
-        self.well_map_widget.setEnabled(enabled)
+        # Fix button names based on UI building methods
+        if hasattr(self, 'clear_corners_btn'): self.clear_corners_btn.setEnabled(enabled)
+        if hasattr(self, 'load_cal_btn'): self.load_cal_btn.setEnabled(enabled)
+        if hasattr(self, 'save_cal_btn'): self.save_cal_btn.setEnabled(enabled)
+        if hasattr(self, 'well_map_widget'): self.well_map_widget.setEnabled(enabled)
 
     def _set_camera_controls_enabled(self, enabled: bool):
         self.auto_exp_check.setEnabled(enabled)
@@ -501,7 +578,7 @@ class CalibrationPanel(QWidget):
         self.reset_camera_btn.setEnabled(enabled)
 
     def _get_cal_dir(self) -> Path:
-        cal_dir = _default_cal_dir()
+        cal_dir = Path.home() / "Documents" / "RoboCam" / "calibrations" # Default to user's Documents/RoboCam/calibrations
         cal_dir.mkdir(parents=True, exist_ok=True)
         return cal_dir
 
@@ -510,6 +587,10 @@ class CalibrationPanel(QWidget):
         self.hw_manager.get_motion_controller().home()
         self._is_homed = True
         self._update_position_display()
+        self._set_movement_controls_enabled(True)
+        self._set_camera_controls_enabled(True)
+        self._cal_status_label.setText("Ready.")
+        self._cal_status_label.setStyleSheet("font-size: 10px; color: green;")
 
     def _on_set_corner_clicked(self, corner_name: str):
         pos = self.hw_manager.get_motion_controller().get_current_position()
@@ -531,9 +612,9 @@ class CalibrationPanel(QWidget):
         self.well_map_widget.clear()
 
     def _on_go_to_xyz_clicked(self):
-        x = float(self.x_go_to_input.text())
-        y = float(self.y_go_to_input.text())
-        z = float(self.z_go_to_input.text())
+        x = self.x_go_to_input.value()
+        y = self.y_go_to_input.value()
+        z = self.z_go_to_input.value()
         self.hw_manager.get_motion_controller().move_to(x, y, z)
         self._update_position_display()
 
@@ -577,6 +658,10 @@ class CalibrationPanel(QWidget):
             self.usb_bandwidth_spin.blockSignals(False)
             self.hw_binning_combo.blockSignals(False)
 
+    def _refresh_camera_controls(self):
+        """Update UI to match hardware state. Called when camera connects."""
+        self._load_camera_settings_from_hw()
+
     def _on_camera_params_changed(self):
         camera = self.hw_manager.get_camera()
         if camera and camera.is_connected:
@@ -611,13 +696,17 @@ class CalibrationPanel(QWidget):
                     break
         else:
             self._custom_rb.setChecked(True)
-            self.step_size_input.setText(custom_step)
+            self.step_size_input.setValue(float(custom_step))
 
         self._last_custom_step = custom_step
 
         # Load camera settings from session
+        self.auto_exp_check.blockSignals(True)
         self.exp_spin.blockSignals(True)
         self.gain_spin.blockSignals(True)
+        self.brightness_spin.blockSignals(True)
+        self.usb_bandwidth_spin.blockSignals(True)
+        self.hw_binning_combo.blockSignals(True)
 
         # Load last used calibration file
         last_cal_path = session_manager.get_session("calibration").get("last_calibration_path")
@@ -649,5 +738,9 @@ class CalibrationPanel(QWidget):
             self.usb_bandwidth_spin.setValue(camera_settings.get("usb_bandwidth", 50))
             self.hw_binning_combo.setCurrentText(str(camera_settings.get("hw_binning", 1)))
 
+        self.auto_exp_check.blockSignals(False)
         self.exp_spin.blockSignals(False)
         self.gain_spin.blockSignals(False)
+        self.brightness_spin.blockSignals(False)
+        self.usb_bandwidth_spin.blockSignals(False)
+        self.hw_binning_combo.blockSignals(False)

@@ -176,6 +176,14 @@ class GCodeSerialMotionController(MotionController):
             self._position = self._sim_printer.position
         return self._position
 
+    def is_homed(self) -> bool:
+        """
+        Return True if the printer has been homed in the current session.
+        Note: This is a simple heuristic based on whether the position is non-zero.
+        """
+        pos = self.get_current_position()
+        return pos != (0.0, 0.0, 0.0)
+
     def query_current_position(self) -> Tuple[float, float, float]:
         """
         Send M114 to the printer, update the cache, and return (X, Y, Z).

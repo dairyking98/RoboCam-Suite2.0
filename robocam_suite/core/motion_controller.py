@@ -50,3 +50,8 @@ class MotionController(ABC):
     def is_connected(self) -> bool:
         """Return True if the motion controller is connected."""
         pass
+
+    @abstractmethod
+    def is_homed(self) -> bool:
+        """Return True if the motion controller has been homed."""
+        pass

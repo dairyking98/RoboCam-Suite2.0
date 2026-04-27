@@ -1024,8 +1024,14 @@ class SetupPanel(QWidget):
 
         try:
             cam = self._hw.get_camera()
-            _set_status(self.camera_status_lbl, cam.is_connected)
-            if cam.is_connected and self.cam_res_combo.count() == 0:
+            was_connected = self.camera_status_lbl.text() == "Connected"
+            is_connected = cam.is_connected
+            _set_status(self.camera_status_lbl, is_connected)
+            
+            if is_connected and not was_connected:
+                self.camera_connected.emit()
+                
+            if is_connected and self.cam_res_combo.count() == 0:
                 self._update_resolution_list()
         except Exception:
             _set_status(self.camera_status_lbl, False)
