@@ -592,27 +592,16 @@ class CalibrationPanel(QWidget):
         self.binning_check.toggled.connect(self._on_camera_params_changed)
         layout.addWidget(self.binning_check, 4, 0, 1, 2)
 
-        # Video Format
-        layout.addWidget(QLabel("Video Format:"), 5, 0)
-        self.video_format_combo = QComboBox()
-        self.video_format_combo.addItems(["AVI (Raw MJPG)", "MP4 (Scientific VFR)"])
-        self.video_format_combo.setToolTip(
-            "AVI (Raw MJPG) — Fast, raw capture.\n"
-            "MP4 (Scientific VFR) — Post-processed for timing accuracy and visual indicators."
-        )
-        self.video_format_combo.currentTextChanged.connect(self._on_camera_params_changed)
-        layout.addWidget(self.video_format_combo, 5, 1)
-
         # Refresh button
         refresh_btn = QPushButton("Refresh Controls")
         refresh_btn.setToolTip("Read current settings from the camera.")
         refresh_btn.clicked.connect(self._refresh_camera_controls)
-        layout.addWidget(refresh_btn, 6, 0, 1, 2)
+        layout.addWidget(refresh_btn, 5, 0, 1, 2)
 
         reset_btn = QPushButton("Reset to Defaults")
         reset_btn.setToolTip("Reset all camera controls to their default values.")
         reset_btn.clicked.connect(self._reset_camera_controls_to_defaults)
-        layout.addWidget(reset_btn, 7, 0, 1, 2)
+        layout.addWidget(reset_btn, 6, 0, 1, 2)
 
         return grp
 
@@ -637,7 +626,6 @@ class CalibrationPanel(QWidget):
             self.brightness_spin.blockSignals(True)
             self.bandwidth_spin.blockSignals(True)
             self.binning_check.blockSignals(True)
-            self.video_format_combo.blockSignals(True)
             
             try:
                 # Basic controls
@@ -652,14 +640,6 @@ class CalibrationPanel(QWidget):
                     self.brightness_spin.setValue(camera.get_target_brightness())
                     self.bandwidth_spin.setValue(camera.get_usb_bandwidth())
                     self.binning_check.setChecked(camera.get_hardware_bin())
-                
-                # Format
-                saved_settings = self._session.get_session("camera_settings", {})
-                fmt = saved_settings.get("video_format")
-                if fmt:
-                    idx = self.video_format_combo.findText(fmt)
-                    if idx >= 0:
-                        self.video_format_combo.setCurrentIndex(idx)
             except Exception as e:
                 logger.warning(f"[Calibration] Refresh camera controls failed: {e}")
             
@@ -670,7 +650,6 @@ class CalibrationPanel(QWidget):
             self.brightness_spin.blockSignals(False)
             self.bandwidth_spin.blockSignals(False)
             self.binning_check.blockSignals(False)
-            self.video_format_combo.blockSignals(False)
 
     def _on_camera_params_changed(self):
         # Persist to session immediately so it's not lost
@@ -682,7 +661,6 @@ class CalibrationPanel(QWidget):
             "target_brightness": self.brightness_spin.value(),
             "usb_bandwidth": self.bandwidth_spin.value(),
             "hardware_bin": self.binning_check.isChecked(),
-            "video_format": self.video_format_combo.currentText(),
         })
 
         camera = hw_manager.get_camera()
