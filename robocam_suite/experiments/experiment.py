@@ -349,6 +349,7 @@ class Experiment:
         logger.info(f"[Experiment] Visiting {len(path_to_run)} wells.")
 
         total = len(path_to_run)
+        recorders = []
         try:
             for well_num, (well_id, position) in enumerate(path_to_run):
                 if self._stop_requested:
@@ -368,14 +369,18 @@ class Experiment:
 
                 if mode == MODE_VIDEO:
                     recorder = self._run_video_well(well_label, camera, gpio, laser_pin, well_num + 1, total)
-                    # Process the video for the well we just finished before moving to the next
                     if recorder:
-                        self._on_status(f"[{well_num + 1}/{total}] Post-processing {well_id}…")
-                        recorder._post_process_video()
+                        recorders.append((well_id, recorder))
                 else:
                     self._run_image_well(well_label, camera, well_num + 1, total)
 
                 time.sleep(float(self.params.get("post_well_delay", 0.0)))
+
+            # Perform batch post-processing after all wells are recorded
+            if recorders and not self._stop_requested:
+                for i, (well_id, recorder) in enumerate(recorders):
+                    self._on_status(f"Post-processing videos ({i+1}/{len(recorders)}): {well_id}…")
+                    recorder._post_process_video()
 
         except Exception as e:
             logger.error(f"[Experiment] Error during run: {e}", exc_info=True)
@@ -453,8 +458,9 @@ class Experiment:
             self._sleep_check_stop(off_post)
 
         except InterruptedError:
-            logger.info(f"[Experiment] Recording interrupted at {well_id}")
-            raise
+            logger.info(f"[Experiment] Well {well_id} interrupted.")
+        except Exception as e:
+            logger.error(f"[Experiment] Error in well {well_id}: {e}")
         finally:
             try:
                 gpio.write_pin(laser_pin, False)
@@ -470,52 +476,52 @@ class Experiment:
     def _run_image_well(self, label: str, camera,
                          well_num: int = 0, total: int = 0):
         """
-        Image capture sequence:
-            dwell (settle)  →  capture single image
+        Capture a single frame at the current well position.
         """
-        dwell  = float(self.params.get("dwell", 0.5))
-        fmt    = self.params.get("image_format", "PNG").upper()
-        ext    = {"PNG": ".png", "TIFF": ".tiff", "JPEG": ".jpg"}.get(fmt, ".png")
+        dwell = float(self.params.get("dwell", 0.5))
         well_id = label.replace("well_", "")
         prefix = f"[{well_num}/{total}] " if total else ""
 
-        self._on_status(f"{prefix}Arrived at {well_id} — settling ({dwell:.1f}s)")
+        img_path = os.path.join(self.output_dir, f"{label}.jpg")
+
         try:
+            # 1. Dwell — settle after move
+            self._on_status(f"{prefix}Arrived at {well_id} — settling ({dwell:.1f}s)")
             self._sleep_check_stop(dwell)
+
+            # 2. Capture
+            if camera.is_connected:
+                self._on_status(f"{prefix}Capturing {well_id}…")
+                frame = camera.read_frame()
+                if frame is not None:
+                    cv2.imwrite(img_path, frame)
+                    logger.info(f"[Experiment] Saved image → {img_path}")
+                    self._on_status(f"{prefix}Saved {well_id}.jpg")
+                else:
+                    logger.error(f"[Experiment] Could not read frame for {well_id}")
+                    self._on_status(f"{prefix}Capture failed for {well_id}")
+            else:
+                logger.warning("[Experiment] Camera not connected — skipping capture.")
+                self._on_status(f"{prefix}Capture skipped for {well_id}")
+
         except InterruptedError:
-            raise
-
-        if not camera.is_connected:
-            logger.warning(f"[Experiment] Camera not connected — skipping image for {label}.")
-            self._on_status(f"{prefix}Skipped {well_id} — no camera")
-            return
-
-        frame = camera.read_frame()
-        if frame is None:
-            logger.warning(f"[Experiment] No frame returned for {label}.")
-            return
-
-        img_path = os.path.join(self.output_dir, f"{label}{ext}")
-        cv2.imwrite(img_path, frame)
-        logger.info(f"[Experiment] Image saved → {img_path}")
-        self._on_status(f"{prefix}Saved {well_id}{ext}")
-
-    # ------------------------------------------------------------------
-    # Control
-    # ------------------------------------------------------------------
-
-    def stop(self):
-        self._stop_requested = True
-
-    # ------------------------------------------------------------------
-    # Metadata
-    # ------------------------------------------------------------------
+            logger.info(f"[Experiment] Well {well_id} interrupted.")
+        except Exception as e:
+            logger.error(f"[Experiment] Error in well {well_id}: {e}")
 
     def _save_well_plate_csv(self):
-        csv_path = os.path.join(self.output_dir, "well_plate_coordinates.csv")
-        with open(csv_path, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["well_index", "x", "y", "z"])
-            for i, pos in enumerate(self.well_plate.get_path()):
-                writer.writerow([i + 1, f"{pos[0]:.4f}", f"{pos[1]:.4f}", f"{pos[2]:.4f}"])
-        logger.info(f"[Experiment] Well coordinates → {csv_path}")
+        """Saves the well coordinates and metadata to a CSV in the output dir."""
+        csv_path = os.path.join(self.output_dir, "well_plate_info.csv")
+        try:
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["Well ID", "X", "Y", "Z"])
+                for well_id, pos in self.well_plate.get_path_with_labels():
+                    writer.writerow([well_id, f"{pos[0]:.3f}", f"{pos[1]:.3f}", f"{pos[2]:.3f}"])
+            logger.info(f"[Experiment] Well plate CSV saved to {csv_path}")
+        except Exception as e:
+            logger.error(f"[Experiment] Failed to save CSV: {e}")
+
+    def stop(self):
+        """Request the experiment loop to stop."""
+        self._stop_requested = True
