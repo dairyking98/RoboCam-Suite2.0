@@ -64,6 +64,7 @@ class _WellRecorder:
         self._end_time = None
         self._actual_fps = 0.0
         self._laser_events = [] # list of (timestamp, state)
+        self._frame_intervals = [] # list of ms between frames
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -101,11 +102,14 @@ class _WellRecorder:
             return
 
         self._start_time = time.time()
+        last_frame_time = self._start_time
         
         try:
             # Write the initial frame we just captured
             writer.write(first_frame)
             self._frames_captured += 1
+            # First interval is 0
+            self._frame_intervals.append(0.0)
             
             # Emit first proxy frame
             self._emit_proxy(first_frame)
@@ -116,6 +120,11 @@ class _WellRecorder:
             while not self._stop_event.is_set():
                 frame = self._camera.read_frame()
                 if frame is not None:
+                    now = time.time()
+                    interval = (now - last_frame_time) * 1000.0 # ms
+                    self._frame_intervals.append(round(interval, 2))
+                    last_frame_time = now
+
                     # Emit proxy frame (for live preview) before any modifications
                     if self._frames_captured % proxy_interval == 0:
                         self._emit_proxy(frame)
@@ -172,7 +181,8 @@ class _WellRecorder:
             "fps_actual": round(self._actual_fps, 2),
             "timestamp": datetime.now().isoformat(),
             "resolution": list(self._camera.get_resolution()),
-            "laser_events": self._laser_events
+            "laser_events": self._laser_events,
+            "frame_intervals_ms": self._frame_intervals
         }
         
         try:
