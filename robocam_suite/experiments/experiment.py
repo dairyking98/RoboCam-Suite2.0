@@ -196,50 +196,40 @@ class _WellRecorder:
 
         temp_output_path = self._output_path.with_name(f"temp_{self._output_path.name}")
         
-        # 1. Build the ffmpeg filter for the laser indicator
-        # We use 'drawtext' to show a red dot and 'LASER' text during ON intervals.
-        # Intervals are [time_offset_on, time_offset_off].
-        filter_parts = []
-        on_start = None
+        # 1. Build the ffmpeg filters
+        # We use 'setpts' to force every frame to have a constant duration, ensuring consistent speed.
+        # We use 'drawtext' with 'between(n, start_frame, end_frame)' for frame-accurate laser indicator.
+        fps_to_use = self._actual_fps if self._actual_fps > 0 else self._fps
+        filter_parts = [f"setpts=N/({fps_to_use}*TB)"]
         
+        on_start_frame = None
         for event in self._laser_events:
+            frame_idx = event.get("frame_index", 0)
             if event["state"] == "ON":
-                on_start = event["time_offset"]
-            elif event["state"] == "OFF" and on_start is not None:
-                on_end = event["time_offset"]
-                # Add a red circle and text
-                # circle: \u25CF (UTF-8 circle)
+                on_start_frame = frame_idx
+            elif event["state"] == "OFF" and on_start_frame is not None:
+                on_end_frame = frame_idx
                 filter_parts.append(
                     f"drawtext=text='● LASER':fontcolor=red:fontsize=24:x=w-120:y=40:"
-                    f"enable='between(t,{on_start},{on_end})'"
+                    f"enable='between(n,{on_start_frame},{on_end_frame})'"
                 )
-                on_start = None
+                on_start_frame = None
         
-        # If still ON at the end of recording
-        if on_start is not None:
+        if on_start_frame is not None:
             filter_parts.append(
                 f"drawtext=text='● LASER':fontcolor=red:fontsize=24:x=w-120:y=40:"
-                f"enable='gt(t,{on_start})'"
+                f"enable='gt(n,{on_start_frame})'"
             )
 
         # 2. Build the command
-        # We specify the input frame rate (-r) BEFORE the input file (-i)
-        # This tells ffmpeg to treat the raw MJPG stream as being at the actual measured FPS.
-        # This ensures every frame is mapped 1:1 to the timeline without dropping or speeding up.
-        fps_to_use = self._actual_fps if self._actual_fps > 0 else self._fps
-        
-        command = ["ffmpeg", "-y", "-r", str(fps_to_use), "-i", str(self._output_path)]
-        
-        if filter_parts:
-            # Join filters with commas
-            video_filter = ",".join(filter_parts)
-            command += ["-vf", video_filter]
-        
-        # We also set the output frame rate to match
-        command += ["-r", str(fps_to_use)]
-        
-        # Re-encode to ensure filters are applied and FPS is baked in
-        command += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23", str(temp_output_path)]
+        # Input -r doesn't matter much now because setpts fixes the timing of every frame.
+        command = [
+            "ffmpeg", "-y", "-i", str(self._output_path),
+            "-vf", ",".join(filter_parts),
+            "-r", str(fps_to_use),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23",
+            str(temp_output_path)
+        ]
 
         logger.info(f"[WellRecorder] Post-processing {self._output_path} (FPS: {fps_to_use:.2f}, Laser filters: {len(filter_parts)})")
         
