@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QGridLayout, QLabel, QLineEdit, QGroupBox,
     QButtonGroup, QRadioButton, QSplitter,
     QFileDialog, QMessageBox, QSpinBox, QScrollArea,
-    QSizePolicy, QCheckBox,
+    QSizePolicy, QCheckBox, QComboBox,
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal
 from PySide6.QtGui import QImage, QPixmap, QPainter, QColor
