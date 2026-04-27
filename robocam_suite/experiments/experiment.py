@@ -120,14 +120,7 @@ class _WellRecorder:
                     if self._frames_captured % proxy_interval == 0:
                         self._emit_proxy(frame)
 
-                    # Create a copy for video recording to apply indicator
-                    frame_to_write = frame.copy()
-
-                    # Draw laser ON indicator if active
-                    if self._hw_manager.get_gpio_controller().get_laser_state():
-                        cv2.putText(frame_to_write, "*", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
-
-                    writer.write(frame_to_write)
+                    writer.write(frame)
                     self._frames_captured += 1
                 
                 # Dynamic sleep to maintain target FPS
