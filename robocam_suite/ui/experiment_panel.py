@@ -542,19 +542,32 @@ class ExperimentPanel(QWidget):
             self._video_inputs[key] = edit
             last_row = i
 
-        # Post-processing toggle
-        self.post_process_check = QCheckBox("Post-process Videos (Fix FPS & Laser Indicator)")
-        self.post_process_check.setChecked(True)
-        self.post_process_check.setToolTip(
-            "If enabled, the system will automatically process the recorded videos after the experiment to:\n"
-            "  1. Bake in a visual '● LASER' indicator based on metadata.\n"
-            "  2. Correct the playback FPS to match the actual recorded rate.\n\n"
-            "Uncheck this if you prefer to keep the raw, unmodified .avi files."
+        # Video Format Selection
+        layout.addWidget(QLabel("Video Format:"), last_row + 1, 0)
+        self.video_format_combo = QComboBox()
+        self.video_format_combo.addItems(["MP4 (Scientific VFR)", "AVI (Raw MJPG)"])
+        self.video_format_combo.setToolTip(
+            "MP4 (Scientific VFR) — Recommended for experiments.\n"
+            "Uses per-frame timestamps to ensure absolute temporal accuracy.\n"
+            "Includes visual laser indicator and metadata-corrected timing.\n\n"
+            "AVI (Raw MJPG) — Saves the raw, unmodified camera stream.\n"
+            "No post-processing or visual indicators applied."
         )
-        self.post_process_check.toggled.connect(self._autosave)
-        layout.addWidget(self.post_process_check, last_row + 1, 0, 1, 2)
+        self.video_format_combo.currentTextChanged.connect(self._on_video_format_changed)
+        layout.addWidget(self.video_format_combo, last_row + 1, 1)
+
+        # Post-processing toggle (Hidden but managed by format selection)
+        self.post_process_check = QCheckBox("Apply Scientific Post-processing")
+        self.post_process_check.setChecked(True)
+        self.post_process_check.setVisible(False) 
+        layout.addWidget(self.post_process_check, last_row + 2, 0, 1, 2)
 
         return self._video_grp
+
+    def _on_video_format_changed(self):
+        is_scientific = "Scientific" in self.video_format_combo.currentText()
+        self.post_process_check.setChecked(is_scientific)
+        self._autosave()
 
     def _build_image_group(self) -> QGroupBox:
         """Parameters for Image Capture mode only."""
@@ -809,6 +822,7 @@ class ExperimentPanel(QWidget):
             "pattern":      self.pattern_combo.currentText(),
             "dwell":        self.dwell_input.text(),
             "image_format": self.image_format_combo.currentText(),
+            "video_format": self.video_format_combo.currentText(),
             "output_dir":   str(self._get_output_dir()),
             "post_process": self.post_process_check.isChecked(),
         }
@@ -834,6 +848,12 @@ class ExperimentPanel(QWidget):
         for k, edit in self._video_inputs.items():
             if f"video_{k}" in d:
                 edit.setText(str(d[f"video_{k}"]))
+        
+        vfmt = d.get("video_format", "MP4 (Scientific VFR)")
+        idx = self.video_format_combo.findText(vfmt)
+        if idx >= 0:
+            self.video_format_combo.setCurrentIndex(idx)
+        
         self.post_process_check.setChecked(d.get("post_process", True))
 
     def _choose_preset_folder(self):
