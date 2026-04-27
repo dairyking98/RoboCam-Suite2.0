@@ -332,5 +332,29 @@ class Experiment(threading.Thread):
         return recorder
 
     def _run_image_well(self, well_id, output_dir):
-        # Implementation for image capture mode
-        pass
+        fmt = self.params.get("image_format", "PNG").lower()
+        image_path = output_dir / f"{well_id}.{fmt}"
+        
+        # Capture a few frames to clear the buffer and ensure we get a fresh one
+        frame = None
+        for _ in range(5):
+            frame = hw_manager.camera.read_frame()
+            time.sleep(0.05)
+            
+        if frame is not None:
+            cv2.imwrite(str(image_path), frame)
+            logger.info(f"[Experiment] Saved image: {image_path}")
+            # Emit the frame to the UI
+            self._on_frame(self._to_qimage(frame))
+        else:
+            logger.error(f"[Experiment] Failed to capture image for well {well_id}")
+
+    def _to_qimage(self, frame):
+        """Helper to convert BGR frame to QImage for UI display."""
+        try:
+            from PySide6.QtGui import QImage
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb.shape
+            return QImage(rgb.data.tobytes(), w, h, ch * w, QImage.Format.Format_RGB888).copy()
+        except Exception:
+            return None

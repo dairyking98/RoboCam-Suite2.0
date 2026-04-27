@@ -769,9 +769,37 @@ class ExperimentPanel(QWidget):
 
         try:
             params = self._current_values()
-            params["selected_well_indices"] = selected_indices
+            
+            # Compute all well positions
             well_plate = WellPlate(width=cols, depth=rows, corners=corners)
-            experiment = Experiment(hw_manager, well_plate, params)
+            well_positions = {}
+            well_list = []
+            
+            # Map selected indices to well IDs and positions
+            # We assume selected_indices are (row, col) tuples from WellSelection
+            for r, c in selected_indices:
+                well_id = f"{chr(65+r)}{c+1}"
+                well_list.append(well_id)
+                pos = well_plate.get_well_position(r, c)
+                well_positions[well_id] = {"x": pos[0], "y": pos[1], "z": pos[2]}
+            
+            # Handle Scan Pattern (Raster vs Snake)
+            if params.get("pattern") == "Snake":
+                # Sort by row, then by col (alternate direction)
+                well_list = []
+                for r in range(rows):
+                    row_wells = [f"{chr(65+r)}{c+1}" for c in range(cols) if (r, c) in selected_indices]
+                    if r % 2 == 1:
+                        row_wells.reverse()
+                    well_list.extend(row_wells)
+            else:
+                # Default Raster: A1, A2... B1, B2...
+                well_list.sort(key=lambda x: (x[0], int(x[1:])))
+
+            params["wells"] = well_list
+            params["well_positions"] = well_positions
+            
+            experiment = Experiment(params, on_frame=self._live_preview.update_frame)
         except Exception as e:
             self.status_label.setText(f"Status: Error — {e}")
             return
