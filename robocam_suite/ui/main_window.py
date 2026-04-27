@@ -72,8 +72,8 @@ class MainWindow(QMainWindow):
         )
         
         # Connect well map navigation
-        self.calibration_panel.well_map_widget.well_clicked.connect(
-            self.calibration_panel._on_well_map_clicked
+        self.calibration_panel.well_map.well_clicked.connect(
+            self.calibration_panel._goto_xyz
         )
         
         # Initial sync check in case calibration was auto-loaded during CalibrationPanel.__init__
@@ -87,9 +87,9 @@ class MainWindow(QMainWindow):
             self.experiment_panel._update_resolution_label
         )
         # Update QuickCapture resolution label
-        # self.setup_panel.camera_connected.connect(
-        #     self.calibration_panel.quick_capture._update_resolution_label
-        # )
+        self.setup_panel.camera_connected.connect(
+            self.calibration_panel.quick_capture._update_resolution_label
+        )
 
         # Attempt initial hardware connection (non-fatal)
         try:

@@ -1,395 +1,954 @@
+"""
+Calibration Panel — jog the stage, record well-plate corners, and navigate wells.
+
+Three-column layout
+--------------------
+Column 1 (large)  : Live camera preview — close-up of whatever the camera sees.
+Column 2 (medium) : Movement controls, Go-To XYZ, corner calibration, save/load.
+Column 3 (medium) : Well Map — compact clickable grid; click any well to go there.
+
+Well-plate map
+--------------
+Generated after all four corners are set (or loaded from file).
+Clicking any button moves the stage to that well's computed XYZ position.
+The map is separate from the live camera feed.
+"""
+from __future__ import annotations
+
 import json
 import logging
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QDoubleSpinBox, QGroupBox, QRadioButton, QButtonGroup, QFileDialog, QMessageBox, QComboBox, QCheckBox)
-from PySide6.QtGui import QPainter, QColor
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QGridLayout, QLabel, QLineEdit, QGroupBox,
+    QButtonGroup, QRadioButton, QSplitter,
+    QFileDialog, QMessageBox, QSpinBox, QScrollArea,
+    QSizePolicy, QCheckBox,
+)
+from PySide6.QtCore import Qt, QTimer, QThread, Signal
+from PySide6.QtGui import QImage, QPixmap, QPainter, QColor
+
+import cv2
+
+from robocam_suite.hw_manager import hw_manager
 from robocam_suite.session_manager import session_manager
-
-# from robocam_suite.ui.well_map_widget import WellMapWidget
-
-logger = logging.getLogger(__name__)
-
+from robocam_suite.ui.quick_capture_widget import QuickCaptureWidget
 from robocam_suite.ui.well_grid import WellGrid
+from robocam_suite.logger import setup_logger
 
-class WellMapWidget(QWidget):
-    well_clicked = Signal(float, float, float)
-    
+logger = setup_logger()
+
+STEP_PRESETS = ["0.1", "0.5", "1.0", "5.0", "10.0"]
+CORNER_NAMES = ["Upper-Left", "Lower-Left", "Upper-Right", "Lower-Right"]
+
+
+def _default_cal_dir() -> Path:
+    return Path.home() / "Documents" / "RoboCam" / "calibrations"
+
+
+# ---------------------------------------------------------------------------
+# Camera frame grabber thread
+# ---------------------------------------------------------------------------
+
+class _FrameGrabber(QThread):
+    frame_ready = Signal(QImage)
+    camera_disconnected = Signal()   # emitted once when camera transitions to disconnected
+
+    def __init__(self, fps: int = 15):
+        super().__init__()
+        self._fps = fps
+        self._running = False
+        self._paused = False
+
+    def stop(self):
+        self._running = False
+
+    def set_paused(self, paused: bool):
+        self._paused = paused
+        logger.debug(f"[_FrameGrabber] {'Paused' if paused else 'Resumed'}")
+
+    def run(self):
+        self._running = True
+        interval_ms = max(1, int(1000 / self._fps))
+        _was_connected = False
+        while self._running:
+            if self._paused:
+                self.msleep(100)
+                continue
+                
+            try:
+                camera = hw_manager.get_camera()
+                if camera and camera.is_connected:
+                    _was_connected = True
+                    frame = camera.read_frame()
+                    if frame is not None:
+                        # If we just got a frame, we are definitely connected
+                        _was_connected = True
+                        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        h, w, ch = rgb.shape
+                        qimg = QImage(
+                            rgb.data.tobytes(), w, h, ch * w,
+                            QImage.Format.Format_RGB888
+                        )
+                        self.frame_ready.emit(qimg.copy())
+                else:
+                    if _was_connected:
+                        self.camera_disconnected.emit()
+                        _was_connected = False
+            except Exception:
+                pass
+
+            self.msleep(interval_ms)
+
+
+# ---------------------------------------------------------------------------
+# Live Preview Widget
+# ---------------------------------------------------------------------------
+
+class _LivePreview(QWidget):
+    """
+    Renders the live camera stream.  Shows a 'Disconnected' message if no
+    frames are arriving.
+    """
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.setMinimumSize(320, 240)
+        self._pixmap: Optional[QPixmap] = None
+        self._disconnected = True
+
+    def update_frame(self, qimg: QImage):
+        self._pixmap = QPixmap.fromImage(qimg)
+        self._disconnected = False
+        self.update()
+
+    def show_disconnected(self):
+        self._disconnected = True
+        self._pixmap = None
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        w, h = self.width(), self.height()
+
+        if self._disconnected or not self._pixmap:
+            painter.fillRect(0, 0, w, h, QColor(30, 30, 30))
+            painter.setPen(Qt.GlobalColor.white)
+            painter.drawText(0, 0, w, h, Qt.AlignmentFlag.AlignCenter, "Camera Offline")
+        else:
+            scaled = self._pixmap.scaled(
+                w, h,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            x_off = (w - scaled.width()) // 2
+            y_off = (h - scaled.height()) // 2
+            painter.drawPixmap(x_off, y_off, scaled)
+
+        # If an experiment is running in the background, we might want to 
+        # indicate that the preview is paused or show an overlay.
+        # We can check the parent's grabber state.
+        parent_panel = self.parent()
+        while parent_panel and not hasattr(parent_panel, '_grabber'):
+            parent_panel = parent_panel.parent()
         
-        self.grid = WellGrid(mode=WellGrid.Mode.NAVIGATE)
-        self.grid.well_clicked.connect(self._on_grid_clicked)
-        self.layout.addWidget(self.grid)
-        
+        if parent_panel and hasattr(parent_panel, '_grabber') and parent_panel._grabber._paused:
+            # Semi-transparent black overlay
+            painter.fillRect(0, 0, w, h, QColor(0, 0, 0, 160))
+            
+            # Red "RECORDING" text
+            painter.setPen(QColor(255, 50, 50))
+            font = painter.font()
+            font.setBold(True)
+            font.setPointSize(24)
+            painter.setFont(font)
+            painter.drawText(0, 0, w, h, Qt.AlignmentFlag.AlignCenter, "● RECORDING\n(Preview Paused)")
+
+        painter.end()
+
+
+# ---------------------------------------------------------------------------
+# Well-plate map widget  (compact clickable grid — NOT the camera feed)
+# ---------------------------------------------------------------------------
+
+class WellMapWidget(QGroupBox):
+    """
+    Compact grid for navigating to wells.  Uses the shared WellGrid in
+    NAVIGATE mode — a single custom-painted widget, no QPushButton children.
+    Clicking any cell emits well_clicked(x, y, z) with the computed position.
+    """
+    well_clicked = Signal(float, float, float)
+
+    def __init__(self, parent=None):
+        super().__init__("Well Map  (click to go to well)", parent)
+        self.setToolTip(
+            "Compact map of the well plate.\n"
+            "Click any well to move the stage directly to that position.\n"
+            "Generated automatically after all four corners are set."
+        )
+        self._positions: list[tuple[float, float, float]] = []
         self._rows = 0
         self._cols = 0
-        self._tl = None
-        self._tr = None
-        self._bl = None
-        self._br = None
 
-    def set_well_grid(self, rows, cols, tl, tr, bl, br):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(4, 4, 4, 4)
+        outer.setSpacing(4)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        outer.addWidget(self._scroll, stretch=1)
+
+        self._placeholder = QLabel("Set all four corners\nor load a calibration\nto build the map.")
+        self._placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._placeholder.setStyleSheet("color: gray; font-size: 10px;")
+        outer.addWidget(self._placeholder)
+
+        self._grid: Optional[WellGrid] = None
+
+    def build(self, rows: int, cols: int,
+              positions: list[tuple[float, float, float]]):
         self._rows = rows
         self._cols = cols
-        self._tl = tl
-        self._tr = tr
-        self._bl = bl
-        self._br = br
-        self.grid.rebuild(rows, cols)
+        self._positions = positions
+        self._placeholder.hide()
+
+        if self._grid is not None:
+            self._grid.well_clicked.disconnect()
+            self._grid.deleteLater()
+
+        self._grid = WellGrid(
+            rows=rows, cols=cols,
+            mode=WellGrid.Mode.NAVIGATE,
+        )
+        self._grid.well_clicked.connect(self._on_cell_clicked)
+        self._scroll.setWidget(self._grid)
 
     def clear(self):
-        self._rows = 0
-        self._cols = 0
-        self.grid.rebuild(0, 0)
+        if self._grid is not None:
+            self._grid.well_clicked.disconnect()
+            self._grid.deleteLater()
+            self._grid = None
+        self._positions = []
+        self._scroll.setWidget(QWidget())  # blank
+        self._placeholder.show()
 
-    def _on_grid_clicked(self, r, c):
-        if self._rows <= 0 or self._cols <= 0 or not self._tl:
-            return
-            
-        # Bilinear interpolation
-        u = c / (self._cols - 1) if self._cols > 1 else 0.5
-        v = r / (self._rows - 1) if self._rows > 1 else 0.5
-        
-        x = (1-u)*(1-v)*self._tl[0] + u*(1-v)*self._tr[0] + (1-u)*v*self._bl[0] + u*v*self._br[0]
-        y = (1-u)*(1-v)*self._tl[1] + u*(1-v)*self._tr[1] + (1-u)*v*self._bl[1] + u*v*self._br[1]
-        z = (1-u)*(1-v)*self._tl[2] + u*(1-v)*self._tr[2] + (1-u)*v*self._bl[2] + u*v*self._br[2]
-        
-        self.well_clicked.emit(x, y, z)
+    def _on_cell_clicked(self, row: int, col: int):
+        idx = row * self._cols + col
+        if 0 <= idx < len(self._positions):
+            x, y, z = self._positions[idx]
+            self.well_clicked.emit(x, y, z)
 
-CORNER_NAMES = ["Upper-Left", "Upper-Right", "Lower-Left", "Lower-Right"]
-STEP_PRESETS = ["0.1", "1.0", "10.0", "100.0"]
+
+# ---------------------------------------------------------------------------
+# Main CalibrationPanel
+# ---------------------------------------------------------------------------
 
 class CalibrationPanel(QWidget):
-    corners_changed = Signal()
+    """
+    Three-column layout:
+      Col 1 — Live camera preview (large)
+      Col 2 — Movement controls + corner calibration + save/load
+      Col 3 — Well map (full height)
+    """
+
+    corners_changed = Signal()  # emitted whenever any corner is set or calibration is loaded
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        from robocam_suite.hw_manager import hw_manager
         self.hw_manager = hw_manager
-        self._is_homed = False
+        self._session = session_manager
+        self._is_homed = False # Track homing status
 
-        self.corners = {
-            "Upper-Left": {"position": None, "label": QLabel("Not Set")},
-            "Upper-Right": {"position": None, "label": QLabel("Not Set")},
-            "Lower-Left": {"position": None, "label": QLabel("Not Set")},
-            "Lower-Right": {"position": None, "label": QLabel("Not Set")},
-        }
+        # Top-level horizontal splitter — three panes
+        splitter = QSplitter(Qt.Orientation.Horizontal, self)
 
-        self.init_ui()
+        # ---- Column 1: Live camera preview --------------------------------
+        col1 = QWidget()
+        col1_layout = QVBoxLayout(col1)
+        col1_layout.setContentsMargins(0, 0, 4, 0)
+        cam_label = QLabel("Live Camera Preview")
+        cam_label.setStyleSheet("font-weight: bold; font-size: 11px;")
+        col1_layout.addWidget(cam_label)
+        self._live_preview = _LivePreview()
+        col1_layout.addWidget(self._live_preview, stretch=1)
+        splitter.addWidget(col1)
+
+        # ---- Column 2: Controls (scrollable) ------------------------------
+        col2_inner = QWidget()
+        col2_layout = QVBoxLayout(col2_inner)
+        col2_layout.setSpacing(6)
+        col2_layout.setContentsMargins(4, 4, 4, 4)
+        col2_layout.addWidget(self._build_movement_group())
+        col2_layout.addWidget(self._build_camera_control_group())
+        col2_layout.addWidget(self._build_calibration_group())
+        col2_layout.addWidget(self._build_save_load_group())
+        self.quick_capture = QuickCaptureWidget("Quick Capture")
+        col2_layout.addWidget(self.quick_capture)
+        col2_layout.addStretch()
+
+        col2_scroll = QScrollArea()
+        col2_scroll.setWidgetResizable(True)
+        col2_scroll.setWidget(col2_inner)
+        col2_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        splitter.addWidget(col2_scroll)
+
+        # ---- Column 3: Well map (full height) -----------------------------
+        col3 = QWidget()
+        col3_layout = QVBoxLayout(col3)
+        col3_layout.setContentsMargins(4, 4, 4, 4)
+        col3_layout.setSpacing(4)
+
+        self.well_map = WellMapWidget()
+        self.well_map.well_clicked.connect(self._goto_xyz)
+        col3_layout.addWidget(self.well_map, stretch=1)
+
+        splitter.addWidget(col3)
+        
+        # Initial refresh of camera controls
+        QTimer.singleShot(2000, self._refresh_camera_controls)
+
+        # Proportions: camera gets ~45%, controls ~30%, map ~25%
+        splitter.setSizes([540, 360, 300])
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 1)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(splitter)
+
         self._load_from_session()
 
-        # Timer to periodically update position display
-        self.position_timer = QTimer(self)
-        self.position_timer.setInterval(1000)  # 1 second
-        self.position_timer.timeout.connect(self._update_position_display)
-        self.position_timer.start()
+        # Position refresh timer
+        self._pos_timer = QTimer(self)
+        self._pos_timer.timeout.connect(self._update_position_display)
+        self._pos_timer.start(500)
 
-    def init_ui(self):
-        main_layout = QVBoxLayout()
+        # Camera frame grabber
+        self._grabber = _FrameGrabber(fps=15)
+        self._grabber.frame_ready.connect(self._live_preview.update_frame)
+        self._grabber.frame_ready.connect(lambda _: self.quick_capture._update_resolution_label())
+        self._grabber.camera_disconnected.connect(self._live_preview.show_disconnected)
+        self._grabber.camera_disconnected.connect(self.quick_capture._update_resolution_label)
+        self._grabber.start()
 
-        # Status Label
-        self._cal_status_label = QLabel("Initializing...")
-        self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
-        main_layout.addWidget(self._cal_status_label)
+        self._last_custom_step = "1.0"
 
-        # Movement Group
-        main_layout.addWidget(self._build_movement_group())
+    def closeEvent(self, event):
+        self._grabber.stop()
+        self._grabber.wait(1000)
+        super().closeEvent(event)
 
-        # Camera Control Group
-        main_layout.addWidget(self._build_camera_control_group())
+    # ------------------------------------------------------------------
+    # Group builders
+    # ------------------------------------------------------------------
 
-        # Corner Setting Group
-        main_layout.addWidget(self._build_corner_setting_group())
+    def _build_movement_group(self) -> QGroupBox:
+        grp = QGroupBox("Movement Controls")
+        layout = QGridLayout(grp)
+        layout.setSpacing(4)
 
-        # Well Map Group
-        main_layout.addWidget(self._build_well_map_group())
+        # Current position display
+        pos_row = QHBoxLayout()
+        pos_row.addWidget(QLabel("X:"))
+        self.x_pos_label = QLabel("0.00")
+        self.x_pos_label.setMinimumWidth(48)
+        pos_row.addWidget(self.x_pos_label)
+        pos_row.addWidget(QLabel("Y:"))
+        self.y_pos_label = QLabel("0.00")
+        self.y_pos_label.setMinimumWidth(48)
+        pos_row.addWidget(self.y_pos_label)
+        pos_row.addWidget(QLabel("Z:"))
+        self.z_pos_label = QLabel("0.00")
+        self.z_pos_label.setMinimumWidth(48)
+        pos_row.addWidget(self.z_pos_label)
+        pos_row.addStretch()
+        layout.addLayout(pos_row, 0, 0, 1, 5)
 
-        # Save/Load Calibration Group
-        main_layout.addWidget(self._build_save_load_group())
-
-        self.setLayout(main_layout)
-
-    def _build_movement_group(self):
-        group = QGroupBox("Movement")
-        layout = QVBoxLayout()
-
-        # Current Position Display
-        pos_layout = QHBoxLayout()
-        pos_layout.addWidget(QLabel("Current Position:"))
-        self.x_pos_label = QLabel("X: --")
-        self.y_pos_label = QLabel("Y: --")
-        self.z_pos_label = QLabel("Z: --")
-        pos_layout.addWidget(self.x_pos_label)
-        pos_layout.addWidget(self.y_pos_label)
-        pos_layout.addWidget(self.z_pos_label)
-        layout.addLayout(pos_layout)
-
-        # Homing Button
-        self.home_btn = QPushButton("Home Printer")
-        self.home_btn.clicked.connect(self._on_home_clicked)
-        layout.addWidget(self.home_btn)
-
-        # Step Size
-        step_layout = QHBoxLayout()
-        step_layout.addWidget(QLabel("Step Size:"))
-        self.step_size_group = QButtonGroup(self)
-        self._custom_rb = QRadioButton("Custom")
-        self.step_size_input = QDoubleSpinBox()
-        self.step_size_input.setRange(0.001, 1000.0)
-        self.step_size_input.setSingleStep(0.1)
-        self.step_size_input.setDecimals(3)
-        self.step_size_input.valueChanged.connect(lambda v: self._on_custom_step_edited(str(v)))
-
-        for preset in STEP_PRESETS:
-            rb = QRadioButton(preset)
-            self.step_size_group.addButton(rb)
-            step_layout.addWidget(rb)
-            rb.clicked.connect(lambda checked, b=rb: self._on_step_btn_clicked(b))
-
-        self.step_size_group.addButton(self._custom_rb)
-        step_layout.addWidget(self._custom_rb)
-        step_layout.addWidget(self.step_size_input)
-        layout.addLayout(step_layout)
-
-        # Movement Buttons
-        grid_layout = QVBoxLayout()
-        btn_size = 40
-
-        # Y movement
-        y_layout = QHBoxLayout()
-        y_layout.addStretch()
+        # XY jog pad
         self.y_plus_btn = QPushButton("Y+")
-        self.y_plus_btn.setFixedSize(btn_size, btn_size)
-        self.y_plus_btn.clicked.connect(lambda: self.hw_manager.get_motion_controller().move_y(self.step_size_input.value()))
-        y_layout.addWidget(self.y_plus_btn)
-        y_layout.addStretch()
-        grid_layout.addLayout(y_layout)
-
-        # X movement
-        x_layout = QHBoxLayout()
+        self.y_plus_btn.setToolTip("Move stage in the +Y direction by the selected step size.")
+        layout.addWidget(self.y_plus_btn, 1, 1)
         self.x_minus_btn = QPushButton("X-")
-        self.x_minus_btn.setFixedSize(btn_size, btn_size)
-        self.x_minus_btn.clicked.connect(lambda: self.hw_manager.get_motion_controller().move_x(-self.step_size_input.value()))
-        x_layout.addWidget(self.x_minus_btn)
-        x_layout.addStretch()
+        self.x_minus_btn.setToolTip("Move stage in the -X direction.")
+        layout.addWidget(self.x_minus_btn, 2, 0)
+        self.home_btn = QPushButton("Home")
+        self.home_btn.setToolTip("Send G28 — home all axes to their endstops.")
+        layout.addWidget(self.home_btn, 2, 1)
         self.x_plus_btn = QPushButton("X+")
-        self.x_plus_btn.setFixedSize(btn_size, btn_size)
-        self.x_plus_btn.clicked.connect(lambda: self.hw_manager.get_motion_controller().move_x(self.step_size_input.value()))
-        x_layout.addWidget(self.x_plus_btn)
-        grid_layout.addLayout(x_layout)
-
-        # Y movement
-        y_layout_neg = QHBoxLayout()
-        y_layout_neg.addStretch()
+        self.x_plus_btn.setToolTip("Move stage in the +X direction.")
+        layout.addWidget(self.x_plus_btn, 2, 2)
         self.y_minus_btn = QPushButton("Y-")
-        self.y_minus_btn.setFixedSize(btn_size, btn_size)
-        self.y_minus_btn.clicked.connect(lambda: self.hw_manager.get_motion_controller().move_y(-self.step_size_input.value()))
-        y_layout_neg.addWidget(self.y_minus_btn)
-        y_layout_neg.addStretch()
-        grid_layout.addLayout(y_layout_neg)
+        self.y_minus_btn.setToolTip("Move stage in the -Y direction.")
+        layout.addWidget(self.y_minus_btn, 3, 1)
 
-        layout.addLayout(grid_layout)
-
-        # Z movement
-        z_layout = QHBoxLayout()
-        z_layout.addWidget(QLabel("Z-Axis:"))
-        self.z_minus_btn = QPushButton("Z-")
-        self.z_minus_btn.setFixedSize(btn_size, btn_size)
-        self.z_minus_btn.clicked.connect(lambda: self.hw_manager.get_motion_controller().move_z(-self.step_size_input.value()))
-        z_layout.addWidget(self.z_minus_btn)
+        # Z jog
         self.z_plus_btn = QPushButton("Z+")
-        self.z_plus_btn.setFixedSize(btn_size, btn_size)
-        self.z_plus_btn.clicked.connect(lambda: self.hw_manager.get_motion_controller().move_z(self.step_size_input.value()))
-        z_layout.addWidget(self.z_plus_btn)
-        layout.addLayout(z_layout)
+        self.z_plus_btn.setToolTip("Move stage up (+Z).")
+        layout.addWidget(self.z_plus_btn, 1, 3)
+        self.z_minus_btn = QPushButton("Z-")
+        self.z_minus_btn.setToolTip("Move stage down (-Z).")
+        layout.addWidget(self.z_minus_btn, 3, 3)
 
-        # Go to XYZ
-        go_to_layout = QHBoxLayout()
-        go_to_layout.addWidget(QLabel("Go to:"))
-        self.x_go_to_input = QDoubleSpinBox()
-        self.x_go_to_input.setRange(-1000.0, 1000.0)
-        self.y_go_to_input = QDoubleSpinBox()
-        self.y_go_to_input.setRange(-1000.0, 1000.0)
-        self.z_go_to_input = QDoubleSpinBox()
-        self.z_go_to_input.setRange(-1000.0, 1000.0)
-        go_to_layout.addWidget(self.x_go_to_input)
-        go_to_layout.addWidget(self.y_go_to_input)
-        go_to_layout.addWidget(self.z_go_to_input)
-        self.go_to_xyz_btn = QPushButton("Go")
-        self.go_to_xyz_btn.clicked.connect(self._on_go_to_xyz_clicked)
-        go_to_layout.addWidget(self.go_to_xyz_btn)
-        layout.addLayout(go_to_layout)
+        # Step size
+        step_grp = QGroupBox("Step Size (mm)")
+        step_grp.setToolTip(
+            "Distance the stage moves per button press.\n"
+            "Use small steps (0.1–0.5 mm) for fine positioning,\n"
+            "larger steps (5–10 mm) for coarse traversal."
+        )
+        step_layout = QHBoxLayout(step_grp)
+        self._step_btn_group = QButtonGroup(self)
+        for i, val in enumerate(STEP_PRESETS):
+            rb = QRadioButton(val)
+            rb.setObjectName(f"step_{val}")
+            self._step_btn_group.addButton(rb, i)
+            step_layout.addWidget(rb)
+            if val == "1.0":
+                rb.setChecked(True)
+        # Custom radio button — selected automatically when user types a value
+        self._custom_rb = QRadioButton("Custom:")
+        self._custom_rb.setObjectName("step_custom")
+        self._step_btn_group.addButton(self._custom_rb, len(STEP_PRESETS))
+        step_layout.addWidget(self._custom_rb)
+        self.step_size_input = QLineEdit("1.0")
+        self.step_size_input.setFixedWidth(55)
+        self.step_size_input.setToolTip("Enter any custom step size in mm.")
+        step_layout.addWidget(self.step_size_input)
+        
+        # Clicking a preset radio → fill the text box with that value
+        self._step_btn_group.buttonClicked.connect(self._on_step_btn_clicked)
+        self.step_size_input.textEdited.connect(self._on_custom_step_edited)
+        layout.addWidget(step_grp, 4, 0, 1, 5)
 
-        group.setLayout(layout)
-        return group
+        # Go-To XYZ
+        goto_grp = QGroupBox("Go To Position")
+        goto_grp.setToolTip(
+            "Enter absolute XYZ coordinates and press Go to move the stage\n"
+            "directly to that position (G90 + G0 X… Y… Z…)."
+        )
+        goto_layout = QHBoxLayout(goto_grp)
+        goto_layout.addWidget(QLabel("X:"))
+        self.goto_x = QLineEdit("0.0")
+        self.goto_x.setFixedWidth(55)
+        goto_layout.addWidget(self.goto_x)
+        goto_layout.addWidget(QLabel("Y:"))
+        self.goto_y = QLineEdit("0.0")
+        self.goto_y.setFixedWidth(55)
+        goto_layout.addWidget(self.goto_y)
+        goto_layout.addWidget(QLabel("Z:"))
+        self.goto_z = QLineEdit("0.0")
+        self.goto_z.setFixedWidth(55)
+        goto_layout.addWidget(self.goto_z)
+        self.goto_btn = QPushButton("Go")
+        self.goto_btn.setToolTip("Move the stage to the entered XYZ coordinates.")
+        self.goto_btn.setFixedWidth(40)
+        self.goto_btn.clicked.connect(self._goto_position)
+        goto_layout.addWidget(self.goto_btn)
+        layout.addWidget(goto_grp, 5, 0, 1, 5)
 
-    def _build_camera_control_group(self):
-        group = QGroupBox("Camera Controls")
-        layout = QVBoxLayout()
+        # Wire jog buttons
+        self.y_plus_btn.clicked.connect(lambda: self._move("y", 1))
+        self.y_minus_btn.clicked.connect(lambda: self._move("y", -1))
+        self.x_plus_btn.clicked.connect(lambda: self._move("x", 1))
+        self.x_minus_btn.clicked.connect(lambda: self._move("x", -1))
+        self.z_plus_btn.clicked.connect(lambda: self._move("z", 1))
+        self.z_minus_btn.clicked.connect(lambda: self._move("z", -1))
+        self.home_btn.clicked.connect(self._home)
 
-        # Auto Exposure
-        self.auto_exp_check = QCheckBox("Auto Exposure")
-        self.auto_exp_check.clicked.connect(self._on_camera_params_changed)
-        layout.addWidget(self.auto_exp_check)
+
+        return grp
+
+    def _build_calibration_group(self) -> QGroupBox:
+        grp = QGroupBox("Well-Plate Corner Calibration")
+        grp.setToolTip(
+            "Jog the stage to each corner of the well plate and press the\n"
+            "corresponding button to record that position.\n"
+            "The suite uses bilinear interpolation to calculate every well position."
+        )
+        layout = QGridLayout(grp)
+        layout.setSpacing(4)
+
+        # Spatial arrangement:
+        #   grid row 0 → Upper row  (Upper-Left col 0, Upper-Right col 1)
+        #   grid row 1 → Lower row  (Lower-Left col 0, Lower-Right col 1)
+        # Each corner occupies two layout rows: label+coords on top, button below.
+        CORNER_POSITIONS = {
+            "Upper-Left":  (0, 0),
+            "Upper-Right": (0, 1),
+            "Lower-Left":  (1, 0),
+            "Lower-Right": (1, 1),
+        }
+
+        self.corners: dict = {}
+        for name, (plate_row, plate_col) in CORNER_POSITIONS.items():
+            grid_row = plate_row * 2   # label row
+            grid_col = plate_col * 2   # label col (each corner is 2 cols wide)
+
+            header = QHBoxLayout()
+            header.addWidget(QLabel(f"{name}:"))
+            pos_label = QLabel("Not Set")
+            pos_label.setStyleSheet("color: gray;")
+            header.addWidget(pos_label)
+            header.addStretch()
+            layout.addLayout(header, grid_row, grid_col, 1, 2)
+
+            set_btn = QPushButton(f"Set {name}")
+            set_btn.setToolTip(
+                f"Record the current stage position as the {name} corner."
+            )
+            layout.addWidget(set_btn, grid_row + 1, grid_col, 1, 2)
+            self.corners[name] = {"label": pos_label, "button": set_btn, "position": None}
+            set_btn.clicked.connect(lambda checked=False, n=name: self._set_corner(n))
+
+        qty_row = QHBoxLayout()
+        qty_row.addWidget(QLabel("Columns (X):"))
+        self.cols_spin = QSpinBox()
+        self.cols_spin.setRange(0, 48)
+        self.cols_spin.setValue(0)
+        self.cols_spin.setToolTip("Number of wells along the X axis (columns).")
+        qty_row.addWidget(self.cols_spin)
+        qty_row.addWidget(QLabel("Rows (Y):"))
+        self.rows_spin = QSpinBox()
+        self.rows_spin.setRange(0, 32)
+        self.rows_spin.setValue(0)
+        self.rows_spin.setToolTip("Number of wells along the Y axis (rows).")
+        qty_row.addWidget(self.rows_spin)
+        layout.addLayout(qty_row, 4, 0, 1, 4)
+
+        update_map_btn = QPushButton("Update Well Map")
+        update_map_btn.setToolTip(
+            "Recompute well positions from the current corners and dimensions\n"
+            "and refresh the well map on the right."
+        )
+        update_map_btn.clicked.connect(self._on_update_well_map)
+        layout.addWidget(update_map_btn, 5, 0, 1, 4)
+
+        return grp
+
+    def _build_camera_control_group(self) -> QGroupBox:
+        grp = QGroupBox("Camera Controls")
+        layout = QGridLayout(grp)
+        layout.setSpacing(4)
+        layout.setContentsMargins(6, 6, 6, 6)
 
         # Exposure
-        exp_layout = QHBoxLayout()
-        exp_layout.addWidget(QLabel("Exposure (us):"))
-        self.exp_spin = QDoubleSpinBox()
-        self.exp_spin.setRange(1.0, 1000000.0) # 1us to 1s
-        self.exp_spin.setSingleStep(1000.0)
-        self.exp_spin.setDecimals(0)
+        layout.addWidget(QLabel("Exposure:"), 0, 0)
+        exp_row = QHBoxLayout()
+        self.exp_spin = QSpinBox()
+        self.exp_spin.setRange(1, 2000) # 1ms to 2s
+        self.exp_spin.setSingleStep(10)
+        self.exp_spin.setSuffix(" ms")
         self.exp_spin.valueChanged.connect(self._on_camera_params_changed)
-        exp_layout.addWidget(self.exp_spin)
-        layout.addLayout(exp_layout)
+        exp_row.addWidget(self.exp_spin)
+        
+        self.auto_exp_check = QCheckBox("Auto")
+        self.auto_exp_check.setToolTip("Enable hardware auto-exposure.")
+        self.auto_exp_check.toggled.connect(self._on_camera_params_changed)
+        exp_row.addWidget(self.auto_exp_check)
+        layout.addLayout(exp_row, 0, 1)
 
         # Gain
-        gain_layout = QHBoxLayout()
-        gain_layout.addWidget(QLabel("Gain:"))
-        self.gain_spin = QDoubleSpinBox()
-        self.gain_spin.setRange(0.0, 1000.0)
-        self.gain_spin.setSingleStep(1.0)
-        self.gain_spin.setDecimals(0)
+        layout.addWidget(QLabel("Gain:"), 1, 0)
+        gain_row = QHBoxLayout()
+        self.gain_spin = QSpinBox()
+        self.gain_spin.setRange(0, 1000)
+        self.gain_spin.setSingleStep(10)
         self.gain_spin.valueChanged.connect(self._on_camera_params_changed)
-        gain_layout.addWidget(self.gain_spin)
-        layout.addLayout(gain_layout)
+        gain_row.addWidget(self.gain_spin)
+        
+        self.auto_gain_check = QCheckBox("Auto")
+        self.auto_gain_check.setToolTip("Enable hardware auto-gain.")
+        self.auto_gain_check.toggled.connect(self._on_camera_params_changed)
+        gain_row.addWidget(self.auto_gain_check)
+        layout.addLayout(gain_row, 1, 1)
 
         # Target Brightness
-        brightness_layout = QHBoxLayout()
-        brightness_layout.addWidget(QLabel("Target Brightness:"))
-        self.brightness_spin = QDoubleSpinBox()
-        self.brightness_spin.setRange(0.0, 255.0)
-        self.brightness_spin.setSingleStep(1.0)
-        self.brightness_spin.setDecimals(0)
+        layout.addWidget(QLabel("Target Brightness:"), 2, 0)
+        self.brightness_spin = QSpinBox()
+        self.brightness_spin.setRange(0, 255)
+        self.brightness_spin.setValue(100)
+        self.brightness_spin.setToolTip("Target brightness level for Auto Exposure/Gain.")
         self.brightness_spin.valueChanged.connect(self._on_camera_params_changed)
-        brightness_layout.addWidget(self.brightness_spin)
-        layout.addLayout(brightness_layout)
+        layout.addWidget(self.brightness_spin, 2, 1)
 
         # USB Bandwidth
-        usb_layout = QHBoxLayout()
-        usb_layout.addWidget(QLabel("USB Bandwidth (%):"))
-        self.usb_bandwidth_spin = QDoubleSpinBox()
-        self.usb_bandwidth_spin.setRange(0.0, 100.0)
-        self.usb_bandwidth_spin.setSingleStep(1.0)
-        self.usb_bandwidth_spin.setDecimals(0)
-        self.usb_bandwidth_spin.valueChanged.connect(self._on_camera_params_changed)
-        usb_layout.addWidget(self.usb_bandwidth_spin)
-        layout.addLayout(usb_layout)
+        layout.addWidget(QLabel("USB Bandwidth:"), 3, 0)
+        self.bandwidth_spin = QSpinBox()
+        self.bandwidth_spin.setRange(35, 100)
+        self.bandwidth_spin.setValue(80)
+        self.bandwidth_spin.setSuffix("%")
+        self.bandwidth_spin.setToolTip("USB bandwidth limit (reduce if experiencing frame drops).")
+        self.bandwidth_spin.valueChanged.connect(self._on_camera_params_changed)
+        layout.addWidget(self.bandwidth_spin, 3, 1)
 
         # Hardware Binning
-        binning_layout = QHBoxLayout()
-        binning_layout.addWidget(QLabel("HW Binning:"))
-        self.hw_binning_combo = QComboBox()
-        self.hw_binning_combo.addItems([str(x) for x in [1, 2, 3, 4]]) # Common binning values
-        self.hw_binning_combo.currentIndexChanged.connect(self._on_camera_params_changed)
-        binning_layout.addWidget(self.hw_binning_combo)
-        layout.addLayout(binning_layout)
+        self.binning_check = QCheckBox("Enable Hardware Binning (2x2)")
+        self.binning_check.setToolTip("Combine 2x2 pixels to increase sensitivity (halves resolution).")
+        self.binning_check.toggled.connect(self._on_camera_params_changed)
+        layout.addWidget(self.binning_check, 4, 0, 1, 2)
 
-        # Reset to Defaults Button
-        self.reset_camera_btn = QPushButton("Reset to Defaults")
-        self.reset_camera_btn.clicked.connect(self._on_reset_camera_clicked)
-        layout.addWidget(self.reset_camera_btn)
+        # Refresh button
+        refresh_btn = QPushButton("Refresh Controls")
+        refresh_btn.setToolTip("Read current settings from the camera.")
+        refresh_btn.clicked.connect(self._refresh_camera_controls)
+        layout.addWidget(refresh_btn, 5, 0, 1, 2)
 
-        group.setLayout(layout)
-        return group
+        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn.setToolTip("Reset all camera controls to their default values.")
+        reset_btn.clicked.connect(self._reset_camera_controls_to_defaults)
+        layout.addWidget(reset_btn, 6, 0, 1, 2)
 
-    def _build_corner_setting_group(self):
-        group = QGroupBox("Corner Setting")
-        layout = QVBoxLayout()
+        return grp
 
-        for name in CORNER_NAMES:
-            corner_layout = QHBoxLayout()
-            btn = QPushButton(f"Set {name.replace('_', ' ').title()}")
-            btn.clicked.connect(lambda checked, n=name: self._on_set_corner_clicked(n))
-            corner_layout.addWidget(btn)
-            corner_layout.addWidget(self.corners[name]["label"])
-            layout.addLayout(corner_layout)
+    def _refresh_camera_controls(self):
+        """
+        Refresh the UI with the camera's current hardware settings, 
+        OR apply the session's saved settings to the hardware if they differ.
+        """
+        camera = hw_manager.get_camera()
+        if camera.is_connected:
+            # If we just connected, we might want to PUSH our saved session settings 
+            # to the hardware instead of pulling them from the hardware.
+            # This ensures the camera starts with the user's last-known-good configuration.
+            self._on_camera_params_changed()
+            
+            # Now block signals and refresh the UI values from the hardware 
+            # (to confirm they were applied correctly)
+            self.exp_spin.blockSignals(True)
+            self.gain_spin.blockSignals(True)
+            self.auto_exp_check.blockSignals(True)
+            self.auto_gain_check.blockSignals(True)
+            self.brightness_spin.blockSignals(True)
+            self.bandwidth_spin.blockSignals(True)
+            self.binning_check.blockSignals(True)
+            
+            try:
+                # Basic controls
+                # SDK uses microseconds, UI uses milliseconds
+                self.exp_spin.setValue(int(camera.get_exposure() / 1000))
+                self.gain_spin.setValue(int(camera.get_gain()))
+                
+                # Advanced controls
+                if hasattr(camera, 'get_auto_exposure'):
+                    self.auto_exp_check.setChecked(camera.get_auto_exposure())
+                    self.auto_gain_check.setChecked(camera.get_auto_gain())
+                    self.brightness_spin.setValue(camera.get_target_brightness())
+                    self.bandwidth_spin.setValue(camera.get_usb_bandwidth())
+                    self.binning_check.setChecked(camera.get_hardware_bin())
+            except Exception as e:
+                logger.warning(f"[Calibration] Refresh camera controls failed: {e}")
+            
+            self.exp_spin.blockSignals(False)
+            self.gain_spin.blockSignals(False)
+            self.auto_exp_check.blockSignals(False)
+            self.auto_gain_check.blockSignals(False)
+            self.brightness_spin.blockSignals(False)
+            self.bandwidth_spin.blockSignals(False)
+            self.binning_check.blockSignals(False)
 
-        self.clear_corners_btn = QPushButton("Clear All Corners")
-        self.clear_corners_btn.clicked.connect(self._on_clear_corners_clicked)
-        layout.addWidget(self.clear_corners_btn)
+    def _on_camera_params_changed(self):
+        # Persist to session immediately so it's not lost
+        self._session.update_session("camera_settings", {
+            "exposure_ms": self.exp_spin.value(),
+            "gain": self.gain_spin.value(),
+            "auto_exposure": self.auto_exp_check.isChecked(),
+            "auto_gain": self.auto_gain_check.isChecked(),
+            "target_brightness": self.brightness_spin.value(),
+            "usb_bandwidth": self.bandwidth_spin.value(),
+            "hardware_bin": self.binning_check.isChecked(),
+        })
 
-        group.setLayout(layout)
-        return group
+        camera = hw_manager.get_camera()
+        if camera.is_connected:
+            try:
+                # Basic controls
+                camera.set_exposure(int(self.exp_spin.value() * 1000))
+                camera.set_gain(int(self.gain_spin.value()))
+                
+                # Advanced controls
+                if hasattr(camera, 'set_auto_exposure'):
+                    camera.set_auto_exposure(self.auto_exp_check.isChecked())
+                    camera.set_auto_gain(self.auto_gain_check.isChecked())
+                    camera.set_target_brightness(int(self.brightness_spin.value()))
+                    camera.set_usb_bandwidth(int(self.bandwidth_spin.value()))
+                    camera.set_hardware_bin(self.binning_check.isChecked())
+                    
+                # Enable/disable spins based on auto state
+                self.exp_spin.setEnabled(not self.auto_exp_check.isChecked())
+                self.gain_spin.setEnabled(not self.auto_gain_check.isChecked())
+            except Exception as e:
+                logger.warning(f"[Calibration] Apply camera params failed: {e}")
 
-    def _build_well_map_group(self):
-        group = QGroupBox("Well Map")
-        layout = QVBoxLayout()
+    def _reset_camera_controls_to_defaults(self):
+        camera = hw_manager.get_camera()
+        if camera.is_connected:
+            camera.reset_to_defaults()
+            self._refresh_camera_controls()
 
-        # Rows and Columns
-        grid_layout = QHBoxLayout()
-        grid_layout.addWidget(QLabel("Rows:"))
-        self.rows_spin = QDoubleSpinBox()
-        self.rows_spin.setRange(1.0, 100.0)
-        self.rows_spin.setSingleStep(1.0)
-        self.rows_spin.setDecimals(0)
-        self.rows_spin.valueChanged.connect(self._generate_well_map)
-        grid_layout.addWidget(self.rows_spin)
+    def _build_save_load_group(self) -> QGroupBox:
+        grp = QGroupBox("Calibration File")
+        grp.setToolTip(
+            "Save the four corner positions to a JSON file so you can reload\n"
+            "them later without re-calibrating."
+        )
+        root = QVBoxLayout(grp)
+        root.setSpacing(3)
+        root.setContentsMargins(6, 6, 6, 6)
 
-        grid_layout.addWidget(QLabel("Cols:"))
-        self.cols_spin = QDoubleSpinBox()
-        self.cols_spin.setRange(1.0, 100.0)
-        self.cols_spin.setSingleStep(1.0)
-        self.cols_spin.setDecimals(0)
-        self.cols_spin.valueChanged.connect(self._generate_well_map)
-        grid_layout.addWidget(self.cols_spin)
-        layout.addLayout(grid_layout)
+        # Row 1 — buttons
+        btn_row = QHBoxLayout()
+        save_btn = QPushButton("Update \u0026 Save Calibration\u2026")
+        save_btn.setToolTip(
+            "Refresh the well map from current corners/dimensions, then\n"
+            "save everything to a .json file."
+        )
+        save_btn.clicked.connect(self._save_calibration)
+        btn_row.addWidget(save_btn)
 
-        self.well_map_widget = WellMapWidget()
-        # Connection moved to MainWindow or connected here
-        self.well_map_widget.well_clicked.connect(self._on_well_map_clicked)
-        layout.addWidget(self.well_map_widget)
+        load_btn = QPushButton("Load Calibration\u2026")
+        load_btn.setToolTip("Load corner positions from a previously saved .json file.")
+        load_btn.clicked.connect(self._load_calibration)
+        btn_row.addWidget(load_btn)
 
-        group.setLayout(layout)
-        return group
+        update_map_btn = QPushButton("Update Well Map")
+        update_map_btn.setToolTip("Force refresh the well map grid from current corners and dimensions.")
+        update_map_btn.clicked.connect(self._rebuild_well_map)
+        btn_row.addWidget(update_map_btn)
+        
+        root.addLayout(btn_row)
 
-    def _build_save_load_group(self):
-        group = QGroupBox("Calibration File")
-        layout = QVBoxLayout()
+        # Row 2 — gray path label + ... folder button
+        path_row = QHBoxLayout()
+        self._cal_dir_label = QLabel(str(_default_cal_dir()))
+        self._cal_dir_label.setStyleSheet(
+            "font-size: 10px; color: #888; font-style: italic;"
+        )
+        self._cal_dir_label.setToolTip("Default folder for calibration files.")
+        path_row.addWidget(self._cal_dir_label, stretch=1)
 
-        load_save_layout = QHBoxLayout()
-        self.load_cal_btn = QPushButton("Load Calibration")
-        self.load_cal_btn.clicked.connect(self._on_load_cal_clicked)
-        load_save_layout.addWidget(self.load_cal_btn)
+        cal_folder_btn = QPushButton("\u2026")
+        cal_folder_btn.setFixedWidth(28)
+        cal_folder_btn.setToolTip("Change the default calibration folder.")
+        cal_folder_btn.clicked.connect(self._choose_cal_folder)
+        path_row.addWidget(cal_folder_btn)
+        root.addLayout(path_row)
 
-        self.save_cal_btn = QPushButton("Save Calibration")
-        self.save_cal_btn.clicked.connect(self._on_save_cal_clicked)
-        load_save_layout.addWidget(self.save_cal_btn)
-        layout.addLayout(load_save_layout)
+        # Row 3 — status label
+        self._cal_status_label = QLabel("")
+        self._cal_status_label.setStyleSheet("font-size: 10px; color: green;")
+        root.addWidget(self._cal_status_label)
 
-        group.setLayout(layout)
-        return group
+        return grp
 
-    def _generate_well_map(self):
-        # Update the well map widget with current corners and dimensions
-        corners_set = all(c["position"] is not None for c in self.corners.values())
-        if corners_set:
-            self.well_map_widget.set_well_grid(
-                int(self.rows_spin.value()),
-                int(self.cols_spin.value()),
-                self.corners["Upper-Left"]["position"],
-                self.corners["Upper-Right"]["position"],
-                self.corners["Lower-Left"]["position"],
-                self.corners["Lower-Right"]["position"],
+    # ------------------------------------------------------------------
+    # Actions — movement
+    # ------------------------------------------------------------------
+
+    def _get_current_step_size(self) -> float:
+        """Get the actual step size based on the selected radio button."""
+        checked_btn = self._step_btn_group.checkedButton()
+        if checked_btn and checked_btn != self._custom_rb:
+            try:
+                return float(checked_btn.text())
+            except ValueError:
+                pass
+        
+        # Fallback to custom input if "Custom" is selected or parsing fails
+        try:
+            return float(self.step_size_input.text())
+        except ValueError:
+            return 1.0
+
+    def _move(self, axis: str, direction: int):
+        try:
+            step = self._get_current_step_size()
+            mc = self.hw_manager.get_motion_controller()
+            mc.move_relative(**{axis: direction * step})
+            # Sync cache with live position so display is accurate after jog
+            mc.query_current_position()
+            self._update_position_display()
+            self._is_homed = True
+            self._set_movement_controls_enabled(True)
+        except Exception as e:
+            logger.warning(f"[Calibration] Move error: {e}")
+
+    def _home(self):
+        try:
+            self.hw_manager.get_motion_controller().home()
+            self._update_position_display()
+        except Exception as e:
+            logger.warning(f"[Calibration] Home error: {e}")
+
+    def _goto_position(self):
+        """Move to the entered XYZ position.
+
+        If any axis field is left empty, the current stage position for that
+        axis is used — matching the 1.0 behaviour where an empty field means
+        "don't change this axis".
+        """
+        try:
+            # Use cached position (no serial command) — just to fill empty fields
+            current = self.hw_manager.get_motion_controller().get_current_position()
+        except Exception as e:
+            logger.warning(f"[Calibration] Could not read current position: {e}")
+            current = (0.0, 0.0, 0.0)
+
+        def _parse(text: str, fallback: float) -> float:
+            stripped = text.strip()
+            if stripped == "":
+                return fallback
+            return float(stripped)  # raises ValueError if invalid
+
+        try:
+            x = _parse(self.goto_x.text(), current[0])
+            y = _parse(self.goto_y.text(), current[1])
+            z = _parse(self.goto_z.text(), current[2])
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input",
+                                "Please enter valid numeric values (or leave blank to keep current position).")
+            return
+
+        self._goto_xyz(x, y, z)
+
+    def _goto_xyz(self, x: float, y: float, z: float):
+        try:
+            mc = self.hw_manager.get_motion_controller()
+            mc.move_absolute(x=x, y=y, z=z)
+            # Sync cache with live position so display is accurate after go-to
+            mc.query_current_position()
+            self.goto_x.setText(f"{x:.3f}")
+            self.goto_y.setText(f"{y:.3f}")
+            self.goto_z.setText(f"{z:.3f}")
+            self._update_position_display()
+            logger.info(f"[Calibration] Go-To → X:{x:.3f} Y:{y:.3f} Z:{z:.3f}")
+        except Exception as e:
+            logger.warning(f"[Calibration] Go-To error: {e}")
+
+    def _set_corner(self, name: str):
+        try:
+            # Query live position from printer so the corner is accurate
+            pos = self.hw_manager.get_motion_controller().query_current_position()
+            self.corners[name]["position"] = list(pos)
+            self.corners[name]["label"].setText(
+                f"X:{pos[0]:.2f}  Y:{pos[1]:.2f}  Z:{pos[2]:.2f}"
             )
-        else:
-            self.well_map_widget.clear()
+            self.corners[name]["label"].setStyleSheet("color: green;")
+            self._persist_corners()
+            # Auto-generate the well map whenever all four corners are now set
+            self._try_auto_generate_well_map()
+            self.corners_changed.emit()
+        except Exception as e:
+            logger.warning(f"[Calibration] Set corner error: {e}")
+
+    # ------------------------------------------------------------------
+    # Actions — well map
+    # ------------------------------------------------------------------
+
+    def _try_auto_generate_well_map(self):
+        """Generate the well map silently if all four corners are set."""
+        if all(self.corners[n]["position"] is not None for n in CORNER_NAMES):
+            self._generate_well_map()
+
+    def _on_update_well_map(self):
+        """Explicit 'Update Well Map' button handler."""
+        cols = self.cols_spin.value()
+        rows = self.rows_spin.value()
+        missing = [n for n in CORNER_NAMES if self.corners[n]["position"] is None]
+        if missing:
+            self._cal_status_label.setText(
+                f"Cannot update map — corners not set: {', '.join(missing)}"
+            )
+            self._cal_status_label.setStyleSheet("font-size: 10px; color: red;")
+            return
+        if rows == 0 or cols == 0:
+            self._cal_status_label.setText(
+                "Cannot update map — set Rows and Columns first."
+            )
+            self._cal_status_label.setStyleSheet("font-size: 10px; color: red;")
+            return
+        self._generate_well_map()
+        self._cal_status_label.setText(
+            f"Well map updated: {rows} rows \u00d7 {cols} cols"
+        )
+        self._cal_status_label.setStyleSheet("font-size: 10px; color: green;")
         self.corners_changed.emit()
 
-    def _persist_corners(self):
-        corners_data = {
-            name: self.corners[name]["position"]
-            for name in CORNER_NAMES
-            if self.corners[name]["position"] is not None
-        }
-        session_manager.update_session("calibration", {"corners": corners_data})
+    def _compute_well_positions(self) -> Optional[list]:
+        corners = [self.corners[n]["position"] for n in CORNER_NAMES]
+        if any(c is None for c in corners):
+            return None
+        cols = self.cols_spin.value()
+        rows = self.rows_spin.value()
+        # Order: Upper-Left, Lower-Left, Upper-Right, Lower-Right
+        ul, ll, ur, lr = corners
+        positions = []
+        for row_i in range(rows):
+            for col_j in range(cols):
+                u = col_j / (cols - 1) if cols > 1 else 0.0
+                v = row_i / (rows - 1) if rows > 1 else 0.0
+                top_x = ul[0] + u * (ur[0] - ul[0])
+                top_y = ul[1] + u * (ur[1] - ul[1])
+                top_z = ul[2] + u * (ur[2] - ul[2])
+                bot_x = ll[0] + u * (lr[0] - ll[0])
+                bot_y = ll[1] + u * (lr[1] - ll[1])
+                bot_z = ll[2] + u * (lr[2] - ll[2])
+                x = top_x + v * (bot_x - top_x)
+                y = top_y + v * (bot_y - top_y)
+                z = top_z + v * (bot_z - top_z)
+                positions.append((x, y, z))
+        return positions
+
+    def _rebuild_well_map(self):
+        """Force a rebuild of the well map from current corners and dimensions."""
+        self._generate_well_map()
+        self.corners_changed.emit()
+
+    def _generate_well_map(self):
+        positions = self._compute_well_positions()
+        if positions is None:
+            return
+        self.well_map.build(
+            rows=self.rows_spin.value(),
+            cols=self.cols_spin.value(),
+            positions=positions,
+        )
+        logger.info(
+            f"[Calibration] Well map generated: "
+            f"{self.rows_spin.value()}×{self.cols_spin.value()} = {len(positions)} wells."
+        )
+
+    # ------------------------------------------------------------------
+    # Actions — save / load calibration
+    # ------------------------------------------------------------------
+
+    def _choose_cal_folder(self):
+        """Let the user pick a different default calibration folder."""
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Calibration Folder",
+            str(getattr(self, "_cal_dir", _default_cal_dir()))
+        )
+        if folder:
+            self._cal_dir = Path(folder)
+            self._cal_dir.mkdir(parents=True, exist_ok=True)
+            self._cal_dir_label.setText(str(self._cal_dir))
+
+    def _get_cal_dir(self) -> Path:
+        """Return the active calibration directory (custom or default)."""
+        d = getattr(self, "_cal_dir", _default_cal_dir())
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
     def _save_calibration(self):
+        corners = {n: self.corners[n]["position"] for n in CORNER_NAMES}
+        if any(v is None for v in corners.values()):
+            QMessageBox.warning(self, "Incomplete Calibration",
+                                "Please set all four corner positions before saving.")
+            return
         cal_dir = self._get_cal_dir()
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Calibration",
@@ -400,7 +959,7 @@ class CalibrationPanel(QWidget):
             return
 
         data = {
-            "corners": {name: self.corners[name]["position"] for name in CORNER_NAMES if self.corners[name]["position"] is not None},
+            "corners": corners,
             "cols": self.cols_spin.value(),
             "rows": self.rows_spin.value(),
         }
@@ -408,33 +967,28 @@ class CalibrationPanel(QWidget):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             self._cal_status_label.setText(f"Saved: {Path(path).name}")
-            self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
+            self._cal_status_label.setStyleSheet("font-size: 10px; color: green;")
             logger.info(f"[Calibration] Saved to {path}")
-            session_manager.update_session("calibration", {"last_calibration_path": str(path)})
-        except OSError as e:
+            # Remember this path in session
+            self._session.update_session("calibration", {"last_calibration_path": str(path)})
+        except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
 
-    def _load_calibration(self, path: Optional[Path] = None):
-        if path is None:
+    def _load_calibration(self, path: Optional[str] = None):
+        if not path:
             cal_dir = self._get_cal_dir()
-            selected_path, _ = QFileDialog.getOpenFileName(
+            path, _ = QFileDialog.getOpenFileName(
                 self, "Load Calibration",
                 str(cal_dir),
                 "JSON Files (*.json)"
             )
-            if not selected_path:
-                # User cancelled, do not load anything and do not save a 'False' path
-                session_manager.update_session("calibration", {"last_calibration_path": None})
-                return False
-            path = Path(selected_path)
-        else:
-            # Ensure path is a Path object if it came from session_manager as str
-            path = Path(path)
+            if not path:
+                return
 
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
+        except Exception as e:
             QMessageBox.critical(self, "Load Error", str(e))
             return
 
@@ -448,73 +1002,31 @@ class CalibrationPanel(QWidget):
                 )
                 self.corners[name]["label"].setStyleSheet("color: green;")
 
-        if "cols" in data:
-            self.cols_spin.setValue(int(data["cols"]))
-        if "rows" in data:
-            self.rows_spin.setValue(int(data["rows"]))
-
-        self._persist_corners()
-        self._cal_status_label.setText(f"Loaded: {Path(path).name}")
-        self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
-        logger.info(f"[Calibration] Loaded from {path}")
-        session_manager.update_session("calibration", {"last_calibration_path": str(path)})
+        self.cols_spin.setValue(data.get("cols", 0))
+        self.rows_spin.setValue(data.get("rows", 0))
         self._generate_well_map()
+        self._cal_status_label.setText(f"Loaded: {Path(path).name}")
+        self._cal_status_label.setStyleSheet("font-size: 10px; color: green;")
+        logger.info(f"[Calibration] Loaded from {path}")
+        # Remember this path in session
+        self._session.update_session("calibration", {"last_calibration_path": str(path)})
         self.corners_changed.emit()
-
-    # ------------------------------------------------------------------
-    # Public accessors used by ExperimentPanel
-    # ------------------------------------------------------------------
-
-    def get_corners(self) -> dict:
-        return {k: v["position"] for k, v in self.corners.items()}
-
-    def get_well_dimensions(self) -> tuple[int, int]:
-        """Return (cols, rows)."""
-        return self.cols_spin.value(), self.rows_spin.value()
-
-    def get_well_positions(self) -> Optional[list]:
-        return self._compute_well_positions()
-
-    def _compute_well_positions(self) -> Optional[list]:
-        corners_set = all(c["position"] is not None for c in self.corners.values())
-        if not corners_set:
-            return None
-        # Simplified bilinear interpolation for well positions
-        tl = self.corners["Upper-Left"]["position"]
-        tr = self.corners["Upper-Right"]["position"]
-        bl = self.corners["Lower-Left"]["position"]
-        br = self.corners["Lower-Right"]["position"]
-        rows = int(self.rows_spin.value())
-        cols = int(self.cols_spin.value())
-        positions = []
-        for r in range(rows):
-            for c in range(cols):
-                u = c / (cols - 1) if cols > 1 else 0.5
-                v = r / (rows - 1) if rows > 1 else 0.5
-                x = (1-u)*(1-v)*tl[0] + u*(1-v)*tr[0] + (1-u)*v*bl[0] + u*v*br[0]
-                y = (1-u)*(1-v)*tl[1] + u*(1-v)*tr[1] + (1-u)*v*bl[1] + u*v*br[1]
-                z = (1-u)*(1-v)*tl[2] + u*(1-v)*tr[2] + (1-u)*v*bl[2] + u*v*br[2]
-                positions.append((x, y, z))
-        return positions
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
     def _on_step_btn_clicked(self, btn):
-        """Preset radio clicked — keep custom input visible."""
-        if btn is not self._custom_rb:
-            # Preset selected - DONT change the input box so the user can still see their custom value
-            session_manager.update_session("calibration", {"step_size": btn.text()})
-        else:
-            # Re-selected "Custom"
-            session_manager.update_session("calibration", {"step_size": str(self.step_size_input.value())})
+        """Preset radio clicked — fill the text box with that value."""
+        self.step_size_input.setText(btn.text())
+        # Update session
+        self._session.update_session("calibration", {"step_size": btn.text()})
 
     def _on_custom_step_edited(self, text: str):
         """User typed in the custom field — auto-select the Custom radio button."""
         self._last_custom_step = text
         self._custom_rb.setChecked(True)
-        session_manager.update_session("calibration", {
+        self._session.update_session("calibration", {
             "step_size": text,
             "custom_step_size": text
         })
@@ -526,221 +1038,103 @@ class CalibrationPanel(QWidget):
             self.x_pos_label.setText(f"{pos[0]:.2f}")
             self.y_pos_label.setText(f"{pos[1]:.2f}")
             self.z_pos_label.setText(f"{pos[2]:.2f}")
-
-            # Update homing status
-            is_homed = mc.is_homed()
-            if is_homed:
-                if not self._is_homed:
-                    self._is_homed = True
+            
+            # Simple homing check: if we are at (0,0,0), we might not be homed
+            if pos == (0.0, 0.0, 0.0) and not self._is_homed:
+                self._cal_status_label.setText("Printer at (0,0,0). Homing recommended.")
+                self._cal_status_label.setStyleSheet("font-size: 10px; color: orange;")
+                self._set_movement_controls_enabled(False)
+            else:
+                self._is_homed = True
+                self._set_movement_controls_enabled(True)
+                if "updated" not in self._cal_status_label.text().lower() and "loaded" not in self._cal_status_label.text().lower():
                     self._cal_status_label.setText("Ready.")
                     self._cal_status_label.setStyleSheet("font-size: 10px; color: #888;")
-                    self._set_movement_controls_enabled(True)
-                    self._set_camera_controls_enabled(True)
-            else:
-                self._is_homed = False
-                self._cal_status_label.setText("<b style=\"color: red;\">Printer Not Homed.</b>")
-                self._cal_status_label.setStyleSheet("font-size: 10px; color: red;")
-                self._set_movement_controls_enabled(False)
-                self._set_camera_controls_enabled(False)
 
         except Exception as e:
-            logger.error(f"[Calibration] Error updating position display: {e}")
-            self.x_pos_label.setText("ERR")
-            self.y_pos_label.setText("ERR")
-            self.z_pos_label.setText("ERR")
-            self._cal_status_label.setText("<b style=\"color: red;\">Printer Disconnected.</b>")
-            self._cal_status_label.setStyleSheet("font-size: 10px; color: red;")
-            self._set_movement_controls_enabled(False)
-            self._set_camera_controls_enabled(False)
+            logger.debug(f"[Calibration] Position display error: {e}")
 
     def _set_movement_controls_enabled(self, enabled: bool):
-        self.y_plus_btn.setEnabled(enabled)
-        self.x_minus_btn.setEnabled(enabled)
-        self.x_plus_btn.setEnabled(enabled)
-        self.y_minus_btn.setEnabled(enabled)
-        self.z_plus_btn.setEnabled(enabled)
-        self.z_minus_btn.setEnabled(enabled)
-        self.home_btn.setEnabled(True) # Always allow homing
-        self.go_to_xyz_btn.setEnabled(enabled)
-        # Fix button names based on UI building methods
-        if hasattr(self, 'clear_corners_btn'): self.clear_corners_btn.setEnabled(enabled)
-        if hasattr(self, 'load_cal_btn'): self.load_cal_btn.setEnabled(enabled)
-        if hasattr(self, 'save_cal_btn'): self.save_cal_btn.setEnabled(enabled)
-        if hasattr(self, 'well_map_widget'): self.well_map_widget.setEnabled(enabled)
+        for btn in (self.x_plus_btn, self.x_minus_btn, self.y_plus_btn, self.y_minus_btn, 
+                    self.z_plus_btn, self.z_minus_btn, self.goto_btn):
+            btn.setEnabled(enabled)
 
-    def _set_camera_controls_enabled(self, enabled: bool):
-        self.auto_exp_check.setEnabled(enabled)
-        self.exp_spin.setEnabled(enabled)
-        self.gain_spin.setEnabled(enabled)
-        self.brightness_spin.setEnabled(enabled)
-        self.usb_bandwidth_spin.setEnabled(enabled)
-        self.hw_binning_combo.setEnabled(enabled)
-        self.reset_camera_btn.setEnabled(enabled)
-
-    def _get_cal_dir(self) -> Path:
-        cal_dir = Path.home() / "Documents" / "RoboCam" / "calibrations" # Default to user's Documents/RoboCam/calibrations
-        cal_dir.mkdir(parents=True, exist_ok=True)
-        return cal_dir
-
-    def _on_home_clicked(self):
-        logger.info("[Calibration] Homing printer...")
-        self.hw_manager.get_motion_controller().home()
-        self._is_homed = True
-        self._update_position_display()
-        self._set_movement_controls_enabled(True)
-        self._set_camera_controls_enabled(True)
-        self._cal_status_label.setText("Ready.")
-        self._cal_status_label.setStyleSheet("font-size: 10px; color: green;")
-
-    def _on_set_corner_clicked(self, corner_name: str):
-        pos = self.hw_manager.get_motion_controller().get_current_position()
-        self.corners[corner_name]["position"] = pos
-        self.corners[corner_name]["label"].setText(
-            f"X:{pos[0]:.2f}  Y:{pos[1]:.2f}  Z:{pos[2]:.2f}"
-        )
-        self.corners[corner_name]["label"].setStyleSheet("color: green;")
-        self._persist_corners()
-        self.corners_changed.emit()
-
-    def _on_clear_corners_clicked(self):
-        for name in CORNER_NAMES:
-            self.corners[name]["position"] = None
-            self.corners[name]["label"].setText("Not Set")
-            self.corners[name]["label"].setStyleSheet("color: #888;")
-        self._persist_corners()
-        self.corners_changed.emit()
-        self.well_map_widget.clear()
-
-    def _on_go_to_xyz_clicked(self):
-        x = self.x_go_to_input.value()
-        y = self.y_go_to_input.value()
-        z = self.z_go_to_input.value()
-        self.hw_manager.get_motion_controller().move_to(x, y, z)
-        self._update_position_display()
-
-    def _on_well_map_clicked(self, x: float, y: float, z: float):
-        self.hw_manager.get_motion_controller().move_to(x, y, z)
-        self._update_position_display()
-
-    def _on_load_cal_clicked(self):
-        self._load_calibration()
-
-    def _on_save_cal_clicked(self):
-        self._save_calibration()
-
-    def _on_reset_camera_clicked(self):
-        logger.info("[Calibration] Resetting camera controls to defaults...")
-        self.hw_manager.get_camera().reset_to_defaults()
-        self._load_camera_settings_from_hw()
-        self._on_camera_params_changed() # Trigger session save
-
-    def _load_camera_settings_from_hw(self):
-        camera = self.hw_manager.get_camera()
-        if camera and camera.is_connected:
-            self.auto_exp_check.blockSignals(True)
-            self.exp_spin.blockSignals(True)
-            self.gain_spin.blockSignals(True)
-            self.brightness_spin.blockSignals(True)
-            self.usb_bandwidth_spin.blockSignals(True)
-            self.hw_binning_combo.blockSignals(True)
-
-            self.auto_exp_check.setChecked(camera.get_auto_exposure())
-            self.exp_spin.setValue(camera.get_exposure())
-            self.gain_spin.setValue(camera.get_gain())
-            self.brightness_spin.setValue(camera.get_target_brightness())
-            self.usb_bandwidth_spin.setValue(camera.get_usb_bandwidth())
-            self.hw_binning_combo.setCurrentText(str(camera.get_hw_binning()))
-
-            self.auto_exp_check.blockSignals(False)
-            self.exp_spin.blockSignals(False)
-            self.gain_spin.blockSignals(False)
-            self.brightness_spin.blockSignals(False)
-            self.usb_bandwidth_spin.blockSignals(False)
-            self.hw_binning_combo.blockSignals(False)
-
-    def _refresh_camera_controls(self):
-        """Update UI to match hardware state. Called when camera connects."""
-        self._load_camera_settings_from_hw()
-
-    def _on_camera_params_changed(self):
-        camera = self.hw_manager.get_camera()
-        if camera and camera.is_connected:
-            camera.set_auto_exposure(self.auto_exp_check.isChecked())
-            camera.set_exposure(self.exp_spin.value())
-            camera.set_gain(self.gain_spin.value())
-            camera.set_target_brightness(self.brightness_spin.value())
-            camera.set_usb_bandwidth(self.usb_bandwidth_spin.value())
-            camera.set_hw_binning(int(self.hw_binning_combo.currentText()))
-
-            # Save all camera settings to session
-            camera_settings = {
-                "auto_exposure": self.auto_exp_check.isChecked(),
-                "exposure": self.exp_spin.value(),
-                "gain": self.gain_spin.value(),
-                "target_brightness": self.brightness_spin.value(),
-                "usb_bandwidth": self.usb_bandwidth_spin.value(),
-                "hw_binning": int(self.hw_binning_combo.currentText()),
-            }
-            session_manager.update_session("calibration", {"camera_settings": camera_settings})
+    def _persist_corners(self):
+        """Save current corners to session."""
+        corners_data = {n: self.corners[n]["position"] for n in CORNER_NAMES}
+        self._session.update_session("calibration", {"corners": corners_data})
 
     def _load_from_session(self):
-        # Load step size from session
-        s = session_manager.get_session("calibration")
+        # Load step size
+        s = self._session.get_session("calibration")
         step_size = s.get("step_size", "1.0")
         custom_step = s.get("custom_step_size", "1.0")
-
-        if step_size in STEP_PRESETS:
-            for rb in self.step_size_group.buttons():
-                if rb.text() == step_size:
-                    rb.setChecked(True)
-                    break
-        else:
+        self.step_size_input.setText(custom_step)
+        
+        # Check presets
+        found = False
+        for rb in self._step_btn_group.buttons():
+            if rb.text() == step_size:
+                rb.setChecked(True)
+                found = True
+                break
+        if not found:
             self._custom_rb.setChecked(True)
-            self.step_size_input.setValue(float(custom_step))
+            self.step_size_input.setText(step_size)
 
-        self._last_custom_step = custom_step
-
-        # Load camera settings from session
-        self.auto_exp_check.blockSignals(True)
-        self.exp_spin.blockSignals(True)
-        self.gain_spin.blockSignals(True)
-        self.brightness_spin.blockSignals(True)
-        self.usb_bandwidth_spin.blockSignals(True)
-        self.hw_binning_combo.blockSignals(True)
-
-        # Load last used calibration file
-        last_cal_path = session_manager.get_session("calibration").get("last_calibration_path")
-        if last_cal_path and last_cal_path != "None": # Check for both None and the string "None"
-            logger.info(f"[Calibration] Auto-loading calibration from {last_cal_path}")
-            self._load_calibration(Path(last_cal_path))
-
-        # Initial check for homing status
-        self._update_position_display()
-
-        # Check initial printer position and enforce homing if at (0,0,0)
-        initial_pos = self.hw_manager.get_motion_controller().get_current_position()
-        if initial_pos == (0.0, 0.0, 0.0):
-            self._set_movement_controls_enabled(False)
-            self._set_camera_controls_enabled(False)
-            self._cal_status_label.setText("<b style=\"color: red;\">Homing Required: Printer at (0,0,0). Please Home.</b>")
+        # Load last calibration file if exists
+        last_cal = s.get("last_calibration_path")
+        if last_cal and Path(last_cal).exists():
+            self._load_calibration(last_cal)
         else:
-            self._set_movement_controls_enabled(True)
-            self._set_camera_controls_enabled(True)
-            self._cal_status_label.setText("Ready.")
+            # Otherwise load corners from session directly
+            corners = s.get("corners", {})
+            for name in CORNER_NAMES:
+                pos = corners.get(name)
+                if pos is not None:
+                    self.corners[name]["position"] = pos
+                    self.corners[name]["label"].setText(
+                        f"X:{pos[0]:.2f}  Y:{pos[1]:.2f}  Z:{pos[2]:.2f}"
+                    )
+                    self.corners[name]["label"].setStyleSheet("color: green;")
+            
+            # Try to auto-generate map
+            self._try_auto_generate_well_map()
 
-        # Load camera settings from session and apply to UI
-        camera_settings = session_manager.get_session("calibration").get("camera_settings", {})
-        if camera_settings:
-            self.auto_exp_check.setChecked(camera_settings.get("auto_exposure", False))
-            self.exp_spin.setValue(camera_settings.get("exposure", 20000))
-            self.gain_spin.setValue(camera_settings.get("gain", 100))
-            self.brightness_spin.setValue(camera_settings.get("target_brightness", 100))
-            self.usb_bandwidth_spin.setValue(camera_settings.get("usb_bandwidth", 50))
-            self.hw_binning_combo.setCurrentText(str(camera_settings.get("hw_binning", 1)))
+        # Load camera settings
+        cam_s = self._session.get_session("camera_settings")
+        if cam_s:
+            self.exp_spin.blockSignals(True)
+            self.gain_spin.blockSignals(True)
+            self.auto_exp_check.blockSignals(True)
+            self.auto_gain_check.blockSignals(True)
+            self.brightness_spin.blockSignals(True)
+            self.bandwidth_spin.blockSignals(True)
+            self.binning_check.blockSignals(True)
+            
+            self.exp_spin.setValue(cam_s.get("exposure_ms", 100))
+            self.gain_spin.setValue(cam_s.get("gain", 100))
+            self.auto_exp_check.setChecked(cam_s.get("auto_exposure", False))
+            self.auto_gain_check.setChecked(cam_s.get("auto_gain", False))
+            self.brightness_spin.setValue(cam_s.get("target_brightness", 100))
+            self.bandwidth_spin.setValue(cam_s.get("usb_bandwidth", 80))
+            self.binning_check.setChecked(cam_s.get("hardware_bin", False))
+            
+            self.exp_spin.blockSignals(False)
+            self.gain_spin.blockSignals(False)
+            self.auto_exp_check.blockSignals(False)
+            self.auto_gain_check.blockSignals(False)
+            self.brightness_spin.blockSignals(False)
+            self.bandwidth_spin.blockSignals(False)
+            self.binning_check.blockSignals(False)
+            
+            # Apply to hardware
+            self._on_camera_params_changed()
 
-        self.auto_exp_check.blockSignals(False)
-        self.exp_spin.blockSignals(False)
-        self.gain_spin.blockSignals(False)
-        self.brightness_spin.blockSignals(False)
-        self.usb_bandwidth_spin.blockSignals(False)
-        self.hw_binning_combo.blockSignals(False)
+    def get_corners(self) -> dict:
+        """Return a dict of corner names -> [x, y, z] positions."""
+        return {n: self.corners[n]["position"] for n in CORNER_NAMES}
+
+    def get_well_dimensions(self) -> tuple[int, int]:
+        """Return (cols, rows)."""
+        return self.cols_spin.value(), self.rows_spin.value()

@@ -176,6 +176,21 @@ class _LivePreview(QWidget):
             font.setPointSize(24)
             painter.setFont(font)
             painter.drawText(0, 0, w, h, Qt.AlignmentFlag.AlignCenter, "● RECORDING")
+
+            # Laser Indicator
+            try:
+                gpio = hw_manager.get_gpio_controller()
+                if gpio and gpio.get_laser_state():
+                    painter.setPen(Qt.GlobalColor.transparent)
+                    painter.setBrush(QColor(255, 0, 0))
+                    painter.drawEllipse(w - 40, 20, 20, 20)
+                    painter.setPen(Qt.GlobalColor.white)
+                    font.setPointSize(10)
+                    painter.setFont(font)
+                    painter.drawText(w - 100, 20, 50, 20, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, "LASER")
+            except Exception:
+                pass
+
         painter.end()
 
 
