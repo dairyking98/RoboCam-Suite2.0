@@ -223,19 +223,22 @@ class _WellRecorder:
             )
 
         # 2. Build the command
-        command = ["ffmpeg", "-y", "-i", str(self._output_path)]
+        # We specify the input frame rate (-r) BEFORE the input file (-i)
+        # This tells ffmpeg to treat the raw MJPG stream as being at the actual measured FPS.
+        # This ensures every frame is mapped 1:1 to the timeline without dropping or speeding up.
+        fps_to_use = self._actual_fps if self._actual_fps > 0 else self._fps
+        
+        command = ["ffmpeg", "-y", "-r", str(fps_to_use), "-i", str(self._output_path)]
         
         if filter_parts:
             # Join filters with commas
             video_filter = ",".join(filter_parts)
             command += ["-vf", video_filter]
         
-        # Set the output FPS to the actual measured FPS
-        fps_to_use = self._actual_fps if self._actual_fps > 0 else self._fps
+        # We also set the output frame rate to match
         command += ["-r", str(fps_to_use)]
         
         # Re-encode to ensure filters are applied and FPS is baked in
-        # We use libx264 for better compatibility if available, else mpeg4
         command += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23", str(temp_output_path)]
 
         logger.info(f"[WellRecorder] Post-processing {self._output_path} (FPS: {fps_to_use:.2f}, Laser filters: {len(filter_parts)})")
