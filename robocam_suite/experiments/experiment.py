@@ -7,7 +7,7 @@ from pathlib import Path
 from datetime import datetime
 import cv2
 from robocam_suite.hw_manager import hw_manager
-logger = logging.getLogger(__name__))
+logger = logging.getLogger(__name__)
 
 class _WellRecorder:
     """Records video from the camera into a file in a background thread."""
