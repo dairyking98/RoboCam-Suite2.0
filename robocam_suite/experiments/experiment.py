@@ -7,12 +7,13 @@ from pathlib import Path
 from datetime import datetime
 import cv2
 from robocam_suite.hw_manager import hw_manager
+
 logger = logging.getLogger(__name__)
 
 class _WellRecorder:
     """Records video from the camera into a file in a background thread."""
 
-    def __init__(self, camera, hw_manager, output_path: str, fps: float = 30.0, on_proxy_frame=None):
+    def __init__(self, camera, output_path: str, fps: float = 30.0, on_proxy_frame=None):
         self._camera = camera
         self._output_path = Path(output_path)
         self._hw_manager = hw_manager
@@ -271,7 +272,7 @@ class Experiment(threading.Thread):
                 # Move to well
                 well_pos = self.params.get("well_positions", {}).get(well_id)
                 if well_pos:
-                    hw_manager.motion.move_to(well_pos['x'], well_pos['y'], well_pos['z'], wait=True)
+                    hw_manager.get_motion_controller().move_to(well_pos['x'], well_pos['y'], well_pos['z'], wait=True)
                 
                 # Dwell
                 dwell = float(self.params.get("dwell", 0.5))
@@ -306,7 +307,7 @@ class Experiment(threading.Thread):
         fps = float(self.params.get("video_fps", 30.0))
         
         recorder = _WellRecorder(
-            hw_manager.camera, hw_manager, str(well_path), 
+            hw_manager.get_camera(), str(well_path), 
             fps=fps, on_proxy_frame=self._on_frame
         )
         
@@ -316,12 +317,12 @@ class Experiment(threading.Thread):
         
         # Laser ON
         on_time = float(self.params.get("video_laser_on", 1.0))
-        hw_manager.gpio.set_laser(True)
+        hw_manager.get_gpio_controller().set_laser(True)
         recorder.log_laser_event(True)
         time.sleep(on_time)
         
         # Laser OFF
-        hw_manager.gpio.set_laser(False)
+        hw_manager.get_gpio_controller().set_laser(False)
         recorder.log_laser_event(False)
         
         # Post-laser
@@ -332,13 +333,13 @@ class Experiment(threading.Thread):
         return recorder
 
     def _run_image_well(self, well_id, output_dir):
-        fmt = self.params.get("image_format", "PNG").lower()
+        fmt = self.params.get("image_format", "png").lower()
         image_path = output_dir / f"{well_id}.{fmt}"
         
         # Capture a few frames to clear the buffer and ensure we get a fresh one
         frame = None
         for _ in range(5):
-            frame = hw_manager.camera.read_frame()
+            frame = hw_manager.get_camera().read_frame()
             time.sleep(0.05)
             
         if frame is not None:
@@ -356,5 +357,6 @@ class Experiment(threading.Thread):
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
             return QImage(rgb.data.tobytes(), w, h, ch * w, QImage.Format.Format_RGB888).copy()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[Experiment] QImage conversion error: {e}")
             return None
